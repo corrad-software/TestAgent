@@ -1,0 +1,21 @@
+{
+  "name": "test-agent",
+  "version": "1.0.0",
+  "description": "AI-powered Playwright test agent",
+  "main": "dist/agent.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node scenarios/login.ts",
+    "dev": "ts-node --watch scenarios/login.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.0.0",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
