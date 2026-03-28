@@ -494,11 +494,18 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Test Types</p>
               <div className="flex flex-col gap-1">
                 {s.testTypes.map(t => {
-                  const passed = lastRun?.passed;
+                  // Use live result if available, else fall back to lastRun
+                  const liveResult = result;
+                  const hasRun = liveResult || lastRun;
+                  const isPassed = liveResult ? liveResult.passed : lastRun?.passed;
+                  // During a run, show spinner for current/pending types
+                  const isRunningThis = running && !liveResult;
                   return (
                     <div key={t} className="flex items-center gap-2">
-                      {lastRun ? (
-                        passed
+                      {isRunningThis ? (
+                        <Loader className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
+                      ) : hasRun ? (
+                        isPassed
                           ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
                           : <X className="w-3.5 h-3.5 text-red-500 shrink-0" />
                       ) : (
