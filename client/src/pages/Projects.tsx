@@ -3,11 +3,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   Plus, FolderOpen, Layers, FlaskConical, Pencil, Trash2,
-  Clock, Upload, CheckCircle2,
+  Clock, Upload, CheckCircle2, Settings2,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime } from "../lib/utils";
 import PageHeader from "../components/PageHeader";
+import { ProjectSettingsModal } from "./Settings";
 
 export default function Projects() {
   const qc = useQueryClient();
@@ -50,6 +51,7 @@ export default function Projects() {
 
   // ── Import DSSB ──────────────────────────────────────────────────────────
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
 
   async function handleImport(files: FileList | File[]) {
     const arr = Array.from(files);
@@ -125,6 +127,13 @@ export default function Projects() {
                     {/* Actions */}
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0"
                       onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => setSettingsProjectId(p.id)}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition"
+                        title="Project settings"
+                      >
+                        <Settings2 className="w-3 h-3" />
+                      </button>
                       <button
                         onClick={() => startEdit(p)}
                         className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition"
@@ -282,6 +291,11 @@ export default function Projects() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Project Settings Modal */}
+      {settingsProjectId && (
+        <ProjectSettingsModal projectId={settingsProjectId} onClose={() => setSettingsProjectId(null)} />
       )}
     </div>
   );

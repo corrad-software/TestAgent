@@ -378,6 +378,42 @@ function MemberAvatar({ member, size = "md" }: { member: Pick<api.Member, "name"
 }
 export { MemberAvatar };
 
+// ─── Project Settings Modal (used from Projects page) ───────────────────────
+export function ProjectSettingsModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const [tab, setTab] = useState<"info" | "team">("info");
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
+  const project = projects.find(p => p.id === projectId);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[85vh]">
+        <div className="flex items-center justify-between px-6 py-3 border-b border-gray-800 shrink-0">
+          <div>
+            <h2 className="text-sm font-semibold text-white">{project?.name ?? "Project"} Settings</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
+        </div>
+        <div className="border-b border-gray-800 px-6 flex gap-1 shrink-0">
+          {([
+            { id: "info" as const, icon: Settings2, label: "Info & Roles" },
+            { id: "team" as const, icon: Users,     label: "Team Members" },
+          ]).map(({ id, icon: Icon, label }) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition
+                ${tab === id ? "border-emerald-500 text-emerald-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>
+              <Icon className="w-3.5 h-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-y-auto p-6">
+          {tab === "info" && project && <ProjectInfoTab project={project} />}
+          {tab === "team" && <TeamTab projectId={projectId} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TeamTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
