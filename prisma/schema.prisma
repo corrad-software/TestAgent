@@ -99,6 +99,7 @@ model RunRecord {
   summary    String
   reportId   String?
   durationMs Int
+  logs       String?
 
   scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 }

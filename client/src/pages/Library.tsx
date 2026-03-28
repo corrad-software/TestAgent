@@ -455,6 +455,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
   const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
   const [useRecorded, setUseRecorded]   = useState(!!s.customSpec);
   const [showCode, setShowCode]         = useState(false);
+  const [logTab, setLogTab]             = useState<"live" | "history">("live");
   const logRef = useRef<HTMLDivElement>(null);
 
   const { data: history } = useQuery({
@@ -480,6 +481,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
     setRunning(true);
     setResult(null);
     setReportUrl(null);
+    setLogTab("live");
     setLogs([headed ? "▶ Starting test (headed)…" : "▶ Starting test (headless)…"]);
     try {
       const res = await fetch(`/library/scenarios/${s.id}/run`, {
@@ -526,6 +528,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
   async function record() {
     setRecording(true);
     setResult(null);
+    setLogTab("live");
     setLogs(["🎬 Starting Playwright Recorder..."]);
     try {
       const res = await fetch(`/library/scenarios/${s.id}/record`, { method: "POST" });
@@ -765,38 +768,91 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
             </div>
           </div>
 
-          {/* Right: Live log terminal */}
+          {/* Right: Live output + history */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            {/* Tab header */}
             <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between shrink-0">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Test Output</span>
-              {running && (
+              <div className="flex items-center gap-1">
+                <button onClick={() => setLogTab("live")}
+                  className={`text-xs font-semibold px-2.5 py-1 rounded transition ${logTab === "live" ? "bg-gray-800 text-gray-200" : "text-gray-500 hover:text-gray-300"}`}>
+                  Live Output
+                </button>
+                <button onClick={() => setLogTab("history")}
+                  className={`text-xs font-semibold px-2.5 py-1 rounded transition ${logTab === "history" ? "bg-gray-800 text-gray-200" : "text-gray-500 hover:text-gray-300"}`}>
+                  History {history?.length ? `(${history.length})` : ""}
+                </button>
+              </div>
+              {logTab === "live" && running && (
                 <span className="text-xs text-emerald-400 flex items-center gap-1.5">
                   <Loader className="w-3 h-3 animate-spin" /> Running…
                 </span>
               )}
-              {result && !running && (
+              {logTab === "live" && result && !running && (
                 <span className={`text-xs font-semibold ${result.passed ? "text-green-400" : "text-red-400"}`}>
                   {result.text}
                 </span>
               )}
             </div>
-            <div ref={logRef}
-              className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed bg-gray-950">
-              {logs.length === 0 ? (
-                <p className="text-gray-700 italic">Click "Run" to start a test…</p>
-              ) : (
-                logs.map((line, i) => (
-                  <div key={i} className={`whitespace-pre-wrap ${
-                    line.startsWith("✅") ? "text-green-400 font-semibold" :
-                    line.startsWith("❌") ? "text-red-400 font-semibold" :
-                    line.startsWith("▶") ? "text-emerald-400" :
-                    line.startsWith("[AUTH]") ? "text-amber-400" :
-                    line.startsWith("[stderr]") ? "text-orange-400" :
-                    "text-gray-400"
-                  }`}>{line}</div>
-                ))
-              )}
-            </div>
+
+            {/* Live output tab */}
+            {logTab === "live" && (
+              <div ref={logRef}
+                className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed bg-gray-950">
+                {logs.length === 0 ? (
+                  <p className="text-gray-700 italic">Click "Run" to start a test…</p>
+                ) : (
+                  logs.map((line, i) => (
+                    <div key={i} className={`whitespace-pre-wrap ${
+                      line.startsWith("✅") ? "text-green-400 font-semibold" :
+                      line.startsWith("❌") ? "text-red-400 font-semibold" :
+                      line.startsWith("▶") ? "text-emerald-400" :
+                      line.startsWith("🎬") ? "text-red-300" :
+                      line.startsWith("[AUTH]") || line.startsWith("🔐") ? "text-amber-400" :
+                      line.startsWith("[stderr]") || line.startsWith("[recorder]") ? "text-orange-400" :
+                      "text-gray-400"
+                    }`}>{line}</div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* History tab */}
+            {logTab === "history" && (
+              <div className="flex-1 overflow-y-auto bg-gray-950">
+                {!history?.length ? (
+                  <p className="text-gray-700 italic text-xs p-4">No run history yet</p>
+                ) : (
+                  history.map(run => (
+                    <details key={run.id} className="border-b border-gray-800/50 group">
+                      <summary className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-900/70 transition text-xs select-none">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${run.passed ? "bg-green-500" : "bg-red-500"}`} />
+                        <span className={`font-semibold ${run.passed ? "text-green-400" : "text-red-400"}`}>
+                          {run.passed ? "Passed" : "Failed"}
+                        </span>
+                        <span className="text-gray-500">{relativeTime(run.runAt)}</span>
+                        <span className="text-gray-700 ml-auto">{(run.durationMs / 1000).toFixed(1)}s</span>
+                      </summary>
+                      <div className="px-4 pb-3 space-y-2">
+                        <p className="text-xs text-gray-500">{run.summary}</p>
+                        {run.reportId && (
+                          <a href={`/playwright-report/${run.reportId}/index.html`} target="_blank" rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                            <BarChart2 className="w-3 h-3" /> View Report
+                          </a>
+                        )}
+                        {run.logs ? (
+                          <pre className="text-xs font-mono text-gray-500 bg-gray-900 border border-gray-800 rounded-lg p-3 max-h-48 overflow-auto whitespace-pre-wrap">
+                            {run.logs}
+                          </pre>
+                        ) : (
+                          <p className="text-xs text-gray-700 italic">No logs saved for this run</p>
+                        )}
+                      </div>
+                    </details>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

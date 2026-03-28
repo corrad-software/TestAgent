@@ -31,7 +31,7 @@ export interface Scenario {
 }
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
-  summary: string; reportId?: string; durationMs: number;
+  summary: string; reportId?: string; durationMs: number; logs?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
@@ -74,7 +74,8 @@ function mapRun(r: any): RunRecord {
   return { id: r.id, scenarioId: r.scenarioId,
            runAt: r.runAt instanceof Date ? r.runAt.toISOString() : r.runAt,
            passed: r.passed, summary: r.summary,
-           reportId: r.reportId ?? undefined, durationMs: r.durationMs };
+           reportId: r.reportId ?? undefined, durationMs: r.durationMs,
+           logs: r.logs ?? undefined };
 }
 function mapMember(m: any): Member {
   return { id: m.id, projectId: m.projectId, name: m.name, email: m.email,
@@ -166,6 +167,7 @@ export async function addRunRecord(record: Omit<RunRecord, "id">): Promise<RunRe
       scenarioId: record.scenarioId, passed: record.passed,
       summary: record.summary, reportId: record.reportId,
       durationMs: record.durationMs, runAt: new Date(record.runAt),
+      logs: record.logs ?? null,
     },
   });
   // Prune oldest beyond limit

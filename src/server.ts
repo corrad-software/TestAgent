@@ -376,7 +376,8 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
 
   const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  const onLog = (msg: string) => send({ type: "log", message: msg });
+  const runLogs: string[] = [];
+  const onLog = (msg: string) => { runLogs.push(msg); send({ type: "log", message: msg }); };
   const startedAt = Date.now();
 
   try {
@@ -392,13 +393,15 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
       const wrappedSend = (data: any) => {
         if (data.type === "result") {
           lastPassed = data.passed; lastSummary = data.summary; lastReportId = data.reportId;
+          runLogs.push(lastPassed ? "✅ Test Passed" : "❌ Test Failed");
           bufferedResult = data;
         } else { send(data); }
       };
       await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, useCustomSpec ? customSpec : undefined);
       await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
                            passed: lastPassed, summary: lastSummary,
-                           reportId: lastReportId, durationMs: Date.now() - startedAt });
+                           reportId: lastReportId, durationMs: Date.now() - startedAt,
+                           logs: runLogs.join("\n") });
       if (bufferedResult) send(bufferedResult);
     }
   } catch (err) {

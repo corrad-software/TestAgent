@@ -24,7 +24,7 @@ export interface Scenario {
 }
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
-  summary: string; reportId?: string; durationMs: number;
+  summary: string; reportId?: string; durationMs: number; logs?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
