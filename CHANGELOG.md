@@ -5,6 +5,11 @@ All notable changes to TestAgent are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Dashboard page** with recharts — pass rate trend (30 days), runs per day bar chart, module breakdown, stat cards, recent runs table
+- **Search & filter** in Library — search by name/Kes ID/Scenario ID, filter by status (passed/failed/never run), filter by flow (positif/negatif), result count
+- **Daily stats API** — `GET /library/daily-stats` and `GET /library/projects/:id/daily-stats` for time-series data
+- **Tech Stack page** — visual documentation of all technologies used
+- **API Explorer page** — interactive API docs with 34 endpoints, try-it button, copy cURL
 - **Unit & integration test suite** (59 tests) using Vitest
   - `specGenerator` — template generation, auth injection, URL escaping
   - `auth` — password hashing, JWT sign/verify, middleware (requireAuth, requireAdmin)

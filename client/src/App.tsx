@@ -8,6 +8,9 @@ import Projects from "./pages/Projects";
 import Library from "./pages/Library";
 import Settings from "./pages/Settings";
 import AppSettings from "./pages/AppSettings";
+import Dashboard from "./pages/Dashboard";
+import TechStack from "./pages/TechStack";
+import ApiExplorer from "./pages/ApiExplorer";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
@@ -31,10 +34,13 @@ function ProtectedRoutes() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Projects />} />
+        <Route path="dashboard" element={<Dashboard />} />
         <Route path="library/:projectId" element={<Library />} />
         <Route path="run" element={<RunTest />} />
         <Route path="settings"     element={<AdminRoute><Settings /></AdminRoute>} />
         <Route path="app-settings" element={<AdminRoute><AppSettings /></AdminRoute>} />
+        <Route path="tech-stack" element={<TechStack />} />
+        <Route path="api-explorer" element={<ApiExplorer />} />
       </Route>
     </Routes>
   );

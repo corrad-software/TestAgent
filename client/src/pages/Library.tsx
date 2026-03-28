@@ -1,10 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
   Layers, Inbox, FolderOpen, BarChart2, X, Loader,
-  CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock,
+  CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
@@ -19,6 +19,11 @@ export default function Library() {
   const [selectedScenario,  setSelectedScenario]  = useState<api.Scenario | null>(null);
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
 
+  // Search & filter state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "passed" | "failed" | "never">("all");
+  const [flowFilter, setFlowFilter] = useState<"all" | "positif" | "negatif">("all");
+
   const { data: projects = [] } = useQuery<api.Project[]>({
     queryKey: ["projects"],
     queryFn: api.getProjects,
@@ -29,6 +34,43 @@ export default function Library() {
   const modules = activeProject?.modules ?? [];
   const activeModule = modules.find((m: api.Module) => m.id === activeModuleId);
   const scenarios = activeModule?.scenarios ?? [];
+
+  // Batch fetch history for filtering
+  const historyQueries = useQueries({
+    queries: scenarios.map(s => ({
+      queryKey: ["history", s.id],
+      queryFn: () => api.getScenarioHistory(s.id),
+      staleTime: 30_000,
+    })),
+  });
+  const historyMap = useMemo(() => {
+    const m = new Map<string, api.RunRecord[] | undefined>();
+    scenarios.forEach((s, i) => m.set(s.id, historyQueries[i]?.data));
+    return m;
+  }, [scenarios, historyQueries]);
+
+  const filteredScenarios = useMemo(() => {
+    return scenarios.filter(s => {
+      // Text search
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        if (!(s.name.toLowerCase().includes(q) || s.testCaseId?.toLowerCase().includes(q) || s.scenarioRefId?.toLowerCase().includes(q))) return false;
+      }
+      // Flow filter
+      if (flowFilter !== "all") {
+        const flow = s.tags.find(t => t === "positif" || t === "negatif");
+        if (flow !== flowFilter) return false;
+      }
+      // Status filter
+      if (statusFilter !== "all") {
+        const last = historyMap.get(s.id)?.[0];
+        if (statusFilter === "never" && last) return false;
+        if (statusFilter === "passed" && (!last || !last.passed)) return false;
+        if (statusFilter === "failed" && (!last || last.passed)) return false;
+      }
+      return true;
+    });
+  }, [scenarios, searchQuery, flowFilter, statusFilter, historyMap]);
 
   const { data: members = [] } = useQuery({
     queryKey: ["members", effectiveProjectId],
@@ -194,12 +236,45 @@ export default function Library() {
 
         {/* Right: Scenario cards */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center px-6 py-3 border-b border-gray-800">
-            <span className="text-sm">
-              {activeModule
-                ? <span className="text-gray-200 font-medium">{activeModule.name}</span>
-                : <span className="text-gray-600 italic">Select a module to view scenarios</span>}
-            </span>
+          {/* Module name + search/filter bar */}
+          <div className="px-4 py-2.5 border-b border-gray-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm">
+                {activeModule
+                  ? <span className="text-gray-200 font-medium">{activeModule.name}</span>
+                  : <span className="text-gray-600 italic">Select a module to view scenarios</span>}
+              </span>
+              {activeModule && scenarios.length > 0 && (
+                <span className="text-xs text-gray-600">{filteredScenarios.length} of {scenarios.length}</span>
+              )}
+            </div>
+            {activeModule && scenarios.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative flex-1 min-w-[180px] max-w-sm">
+                  <Search className="w-3.5 h-3.5 text-gray-600 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search name, Kes ID, Scenario ID..."
+                    className="w-full bg-gray-950 border border-gray-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+                </div>
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)}
+                  className="bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
+                  <option value="all">All Status</option>
+                  <option value="passed">Passed</option>
+                  <option value="failed">Failed</option>
+                  <option value="never">Never Run</option>
+                </select>
+                <select value={flowFilter} onChange={e => setFlowFilter(e.target.value as any)}
+                  className="bg-gray-950 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
+                  <option value="all">All Flow</option>
+                  <option value="positif">Positif</option>
+                  <option value="negatif">Negatif</option>
+                </select>
+                {(searchQuery || statusFilter !== "all" || flowFilter !== "all") && (
+                  <button onClick={() => { setSearchQuery(""); setStatusFilter("all"); setFlowFilter("all"); }}
+                    className="text-xs text-gray-500 hover:text-gray-300 transition px-1.5">Clear</button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-6">
@@ -207,7 +282,7 @@ export default function Library() {
               <EmptyState icon={<FolderOpen className="w-12 h-12 text-gray-700" />} text="Create a project to get started" />
             ) : !activeModuleId ? (
               <EmptyState icon={<FolderOpen className="w-12 h-12 text-gray-700" />} text="Select a module from the list" sub="or create a module to get started" />
-            ) : !scenarios.length ? (
+            ) : !filteredScenarios.length && !scenarios.length ? (
               <EmptyState
                 icon={<Inbox className="w-12 h-12 text-gray-700" />}
                 text="No scenarios in this module"
@@ -227,13 +302,16 @@ export default function Library() {
                   <span className="w-14 shrink-0 text-center hidden md:block">Flow</span>
                   <span className="w-16 shrink-0 text-center">Status</span>
                 </div>
-                {scenarios.map((s: api.Scenario) => (
+                {filteredScenarios.map((s: api.Scenario) => (
                   <ScenarioRow
                     key={s.id}
                     scenario={s}
                     onSelect={() => setSelectedScenario(s)}
                   />
                 ))}
+                {filteredScenarios.length === 0 && scenarios.length > 0 && (
+                  <div className="px-4 py-8 text-center text-xs text-gray-600">No scenarios match your filters</div>
+                )}
               </div>
             )}
           </div>

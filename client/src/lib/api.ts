@@ -92,6 +92,11 @@ export const deleteMember = (id: string) =>
 export const getStats = (projectId?: string) =>
   fetch(projectId ? `/library/projects/${projectId}/stats` : "/library/stats").then(r => json<DashboardStats>(r));
 
+export interface DailyStatsDay { date: string; totalRuns: number; passCount: number; failCount: number; passRate: number }
+export interface DailyStats { days: DailyStatsDay[] }
+export const getDailyStats = (projectId?: string) =>
+  fetch(projectId ? `/library/projects/${projectId}/daily-stats` : "/library/daily-stats").then(r => json<DailyStats>(r));
+
 // Auth
 export interface AuthUser { id: string; email: string; name: string; role: string }
 export const getMe        = () => fetch("/auth/me").then(r => r.ok ? r.json() as Promise<AuthUser> : Promise.reject());

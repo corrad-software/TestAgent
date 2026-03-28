@@ -253,6 +253,49 @@ export async function getDashboardStats(projectId?: string): Promise<DashboardSt
   };
 }
 
+// ─── Daily Stats (time-series) ───────────────────────────────────────────────
+
+export interface DailyStats {
+  days: { date: string; totalRuns: number; passCount: number; failCount: number; passRate: number }[];
+}
+
+export async function getDailyStats(projectId?: string, rangeDays = 30): Promise<DailyStats> {
+  const moduleFilter = projectId ? { projectId } : {};
+  const modules = await prisma.module.findMany({ where: moduleFilter, include: { scenarios: { select: { id: true } } } });
+  const scenarioIds = modules.flatMap(m => m.scenarios.map(s => s.id));
+
+  const since = new Date(Date.now() - rangeDays * 86400000);
+  const runs = await prisma.runRecord.findMany({
+    where: { scenarioId: { in: scenarioIds }, runAt: { gte: since } },
+    select: { runAt: true, passed: true },
+    orderBy: { runAt: "asc" },
+  });
+
+  // Group by date
+  const dayMap = new Map<string, { total: number; pass: number }>();
+  for (const r of runs) {
+    const d = (r.runAt instanceof Date ? r.runAt : new Date(r.runAt)).toISOString().slice(0, 10);
+    const entry = dayMap.get(d) ?? { total: 0, pass: 0 };
+    entry.total++;
+    if (r.passed) entry.pass++;
+    dayMap.set(d, entry);
+  }
+
+  // Fill missing days
+  const days: DailyStats["days"] = [];
+  for (let i = rangeDays - 1; i >= 0; i--) {
+    const date = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const entry = dayMap.get(date);
+    if (entry) {
+      days.push({ date, totalRuns: entry.total, passCount: entry.pass, failCount: entry.total - entry.pass, passRate: entry.total ? Math.round(entry.pass / entry.total * 100) : 0 });
+    } else {
+      days.push({ date, totalRuns: 0, passCount: 0, failCount: 0, passRate: 0 });
+    }
+  }
+
+  return { days };
+}
+
 // ─── Legacy compat (used by import route) ────────────────────────────────────
 
 export async function getLibrary() {

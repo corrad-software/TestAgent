@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Bot, FlaskConical, FolderOpen, Settings, SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LogOut } from "lucide-react";
+import { Bot, FlaskConical, FolderOpen, BarChart2, Settings, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut } from "lucide-react";
 import { useAuth } from "../lib/AuthContext";
 
 export default function Layout() {
@@ -41,9 +41,12 @@ export default function Layout() {
         <nav className="px-3 py-4 space-y-1 flex-1">
           {[
             { to: "/",             icon: FolderOpen,        label: "Projects",         adminOnly: false },
+            { to: "/dashboard",    icon: BarChart2,         label: "Dashboard",        adminOnly: false },
             { to: "/run",          icon: FlaskConical,      label: "Quick Run Test",   adminOnly: false },
             { to: "/settings",     icon: Settings,          label: "Project Settings", adminOnly: true  },
             { to: "/app-settings", icon: SlidersHorizontal, label: "App Settings",     adminOnly: true  },
+            { to: "/tech-stack",   icon: Layers,             label: "Tech Stack",       adminOnly: false },
+            { to: "/api-explorer", icon: Route,              label: "API Explorer",     adminOnly: false },
           ].filter(item => !item.adminOnly || user?.role === "Admin")
           .map(({ to, icon: Icon, label }) => (
             <NavLink

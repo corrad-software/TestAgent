@@ -34,6 +34,7 @@ import {
   updateMember,
   deleteMember,
   getDashboardStats,
+  getDailyStats,
   getRoles,
   createRole,
   updateRole,
@@ -439,6 +440,15 @@ app.get("/library/projects/:id/stats", async (req, res) => {
 // Global stats (all projects)
 app.get("/library/stats", async (_req, res) => {
   try { res.json(await getDashboardStats()); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+// Daily stats (time-series)
+app.get("/library/projects/:id/daily-stats", async (req, res) => {
+  try { res.json(await getDailyStats(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.get("/library/daily-stats", async (_req, res) => {
+  try { res.json(await getDailyStats()); }
   catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
