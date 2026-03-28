@@ -5,6 +5,9 @@ All notable changes to TestAgent are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Negative testing** — forms template now includes empty submission validation test + invalid email format test (auto-skip if no required fields/email fields)
+- **AI assertion enrichment** — "Add Assertions (AI)" button on recorded specs: Haiku analyzes code and injects expect() checks (one-time ~$0.001 per call, cached)
+- **AI failure explainer** endpoint — POST /library/scenarios/:id/explain-failure returns plain-language explanation of what went wrong
 - **Playwright Codegen recorder** — Record button in scenario detail modal launches `npx playwright codegen`, auto-saves generated spec to DB
 - **Custom spec support** — scenarios can store recorded Playwright code alongside templates; toggle between "Template" and "Recorded" when running
 - **Code viewer** — collapsible view of recorded spec with line count and delete option

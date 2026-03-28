@@ -455,6 +455,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
   const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
   const [useRecorded, setUseRecorded]   = useState(!!s.customSpec);
   const [showCode, setShowCode]         = useState(false);
+  const [enriching, setEnriching]       = useState(false);
   const [logTab, setLogTab]             = useState<"live" | "history">("live");
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -576,6 +577,41 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
     setUseRecorded(false);
     setShowCode(false);
     onRefresh();
+  }
+
+  async function enrichWithAI() {
+    setEnriching(true);
+    setLogTab("live");
+    setLogs(["✨ Asking AI to add assertions to recorded spec..."]);
+    try {
+      const res = await fetch(`/library/scenarios/${s.id}/enrich`, { method: "POST" });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "log") setLogs(prev => [...prev, ev.message]);
+            if (ev.type === "enriched" && ev.code) {
+              setRecordedCode(ev.code);
+              setLogs(prev => [...prev, "✅ Assertions added and saved"]);
+              onRefresh();
+            }
+            if (ev.type === "error") setLogs(prev => [...prev, `❌ ${ev.message}`]);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
+    } finally {
+      setEnriching(false);
+    }
   }
 
   const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
@@ -736,11 +772,17 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
                   {showCode ? "▾" : "▸"} Recorded Spec ({recordedCode.split("\n").length} lines)
                 </button>
                 {showCode && (
-                  <div className="relative">
-                    <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 max-h-32 overflow-auto whitespace-pre-wrap">{recordedCode}</pre>
-                    <button onClick={deleteCustomSpec}
-                      className="absolute top-1.5 right-1.5 text-xs text-gray-600 hover:text-red-400 transition" title="Delete recorded spec">
-                      <Trash2 className="w-3 h-3" />
+                  <div className="space-y-1.5">
+                    <div className="relative">
+                      <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 max-h-32 overflow-auto whitespace-pre-wrap">{recordedCode}</pre>
+                      <button onClick={deleteCustomSpec}
+                        className="absolute top-1.5 right-1.5 text-xs text-gray-600 hover:text-red-400 transition" title="Delete recorded spec">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <button onClick={enrichWithAI} disabled={enriching || running || recording}
+                      className="w-full flex items-center justify-center gap-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 disabled:opacity-50 text-violet-400 py-1.5 rounded-lg transition">
+                      {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding assertions...</> : "✨ Add Assertions (AI)"}
                     </button>
                   </div>
                 )}

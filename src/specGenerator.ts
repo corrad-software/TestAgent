@@ -192,11 +192,11 @@ test.describe('Navigation Test', () => {${descComment}
     forms: `import { test, expect } from '@playwright/test';
 
 test.describe('Form Test', () => {${descComment}
-  test('form fields accept input', async ({ page }) => {
+  test('form fields accept input (positive)', async ({ page }) => {
     await page.goto(${JSON.stringify(url)});
     await page.screenshot({ path: 'test-results/forms-before.png' });
 
-    // Fill text inputs
+    // Fill text inputs with valid data
     const inputs = page.locator('input:visible:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
     const inputCount = Math.min(await inputs.count(), 10);
     for (let i = 0; i < inputCount; i++) {
@@ -232,6 +232,61 @@ test.describe('Form Test', () => {${descComment}
     }
 
     await page.screenshot({ path: 'test-results/forms-filled.png' });
+  });
+
+  test('empty form submission shows validation (negative)', async ({ page }) => {
+    await page.goto(${JSON.stringify(url)});
+
+    // Find required fields and clear them
+    const requiredInputs = page.locator('input[required]:visible, textarea[required]:visible, select[required]:visible');
+    const reqCount = await requiredInputs.count();
+    if (reqCount === 0) test.skip(true, 'No required fields found');
+
+    for (let i = 0; i < reqCount; i++) {
+      try { await requiredInputs.nth(i).clear(); } catch {}
+    }
+
+    // Try to submit empty form
+    const submitBtn = page.locator('button[type="submit"], input[type="submit"]').first();
+    if (await submitBtn.count() > 0) {
+      await submitBtn.click();
+    }
+
+    // Check for validation errors — look for common error patterns
+    const errorIndicators = page.locator(
+      '[class*="error"], [class*="invalid"], [class*="danger"], [role="alert"], ' +
+      '.field-error, .form-error, .validation-error, .text-red, .text-danger, ' +
+      ':invalid, [aria-invalid="true"]'
+    );
+    const errorCount = await errorIndicators.count();
+
+    // Also check native HTML5 validation
+    const invalidFields = page.locator(':invalid');
+    const invalidCount = await invalidFields.count();
+
+    expect(errorCount + invalidCount).toBeGreaterThan(0);
+    await page.screenshot({ path: 'test-results/forms-validation-error.png' });
+  });
+
+  test('invalid email format shows error (negative)', async ({ page }) => {
+    await page.goto(${JSON.stringify(url)});
+
+    const emailInput = page.locator('input[type="email"]:visible, input[name*="email"]:visible').first();
+    if (await emailInput.count() === 0) test.skip(true, 'No email field found');
+
+    await emailInput.fill('not-an-email');
+
+    const submitBtn = page.locator('button[type="submit"], input[type="submit"]').first();
+    if (await submitBtn.count() > 0) {
+      await submitBtn.click();
+    }
+
+    // Email field should be invalid (HTML5 validation or custom)
+    const isInvalid = await emailInput.evaluate((el: HTMLInputElement) => !el.validity.valid);
+    const hasAriaInvalid = await emailInput.getAttribute('aria-invalid');
+    expect(isInvalid || hasAriaInvalid === 'true').toBeTruthy();
+
+    await page.screenshot({ path: 'test-results/forms-invalid-email.png' });
   });
 });`,
 

@@ -484,6 +484,45 @@ app.post("/library/scenarios/:id/record", async (req, res) => {
   }
 });
 
+// ─── Library: AI-assist endpoints ────────────────────────────────────────────
+app.post("/library/scenarios/:id/enrich", async (req, res) => {
+  const scenario = await getScenario(req.params.id);
+  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
+  if (!scenario.customSpec) { res.status(400).json({ error: "No recorded spec to enrich" }); return; }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const { enrichWithAssertions } = await import("./aiAssist");
+    const enriched = await enrichWithAssertions(
+      scenario.customSpec, scenario.url, scenario.description,
+      (msg) => send({ type: "log", message: msg }),
+    );
+    await updateScenario(scenario.id, { customSpec: enriched } as any);
+    send({ type: "enriched", code: enriched });
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+  } finally {
+    res.end();
+  }
+});
+
+app.post("/library/scenarios/:id/explain-failure", async (req, res) => {
+  const scenario = await getScenario(req.params.id);
+  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
+  const { summary, logs } = req.body as { summary: string; logs: string };
+  try {
+    const { explainFailure } = await import("./aiAssist");
+    const explanation = await explainFailure(scenario.url, summary, logs);
+    res.json({ explanation });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 // ─── Library: Save / Delete custom spec ─────────────────────────────────────
 app.put("/library/scenarios/:id/custom-spec", async (req, res) => {
   try {
