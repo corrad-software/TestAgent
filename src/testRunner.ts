@@ -99,23 +99,23 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
 
 // ─── Playwright JSON result types ─────────────────────────────────────────────
 
-interface PlaywrightJsonResults {
+export interface PlaywrightJsonResults {
   stats: { expected: number; unexpected: number; duration: number };
   suites: PlaywrightSuite[];
 }
 
-interface PlaywrightSuite {
+export interface PlaywrightSuite {
   title: string;
   suites?: PlaywrightSuite[];
   specs?: PlaywrightSpec[];
 }
 
-interface PlaywrightSpec {
+export interface PlaywrightSpec {
   title: string;
   ok: boolean;
 }
 
-function buildSummary(results: PlaywrightJsonResults): string {
+export function buildSummary(results: PlaywrightJsonResults): string {
   const { expected, unexpected, duration } = results.stats;
   const total = expected + unexpected;
   const durationSec = (duration / 1000).toFixed(1);

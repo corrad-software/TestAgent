@@ -92,7 +92,7 @@ function injectAuthIntoSpec(
     .join("\n");
 
   spec = spec.replace(
-    /(test\.describe\s*\([^)]+\)\s*,?\s*(?:async\s*)?\(\s*\)\s*=>\s*\{)/,
+    /(test\.describe\s*\(.+?=>\s*\{)/,
     `$1\n\n${authBlock}\n`
   );
 
