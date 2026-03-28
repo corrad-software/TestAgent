@@ -56,6 +56,24 @@ app.use(express.static(clientDist));
 // Serve legacy public dir as fallback during transition
 app.use(express.static(path.join(__dirname, "../public")));
 
+// SPA catch-all: serve index.html for client-side routes (before auth middleware)
+app.use((req, res, next) => {
+  // Skip API paths, file requests, and auth endpoints
+  if (
+    req.method !== "GET" ||
+    req.path.startsWith("/auth/") ||
+    req.path.startsWith("/library/") ||
+    req.path.startsWith("/run-test") ||
+    req.path.startsWith("/app-settings") ||
+    req.path.startsWith("/ai/") ||
+    req.path.startsWith("/reports") ||
+    req.path.startsWith("/playwright-report") ||
+    req.path.includes(".")
+  ) return next();
+  const indexPath = path.join(clientDist, "index.html");
+  fs.access(indexPath).then(() => res.sendFile(indexPath)).catch(() => next());
+});
+
 // Serve per-run Playwright HTML reports dynamically
 app.use("/playwright-report/:runId", (req, res, next) => {
   const runId = req.params.runId;
@@ -860,16 +878,6 @@ app.post("/library/import", upload.array("files", 100), async (req, res) => {
   }
 
   res.json({ created: created.length, createdNames: created, errors });
-});
-
-// ─── React SPA catch-all (must be last) ──────────────────────────────────────
-app.get("/{*path}", (req, res, next) => {
-  // Only serve index.html for non-API, non-file requests
-  if (req.path.startsWith("/api") || req.path.includes(".")) return next();
-  const indexPath = path.join(clientDist, "index.html");
-  fs.access(indexPath)
-    .then(() => res.sendFile(indexPath))
-    .catch(() => next());
 });
 
 const PORT = Number(process.env.PORT ?? 4000);
