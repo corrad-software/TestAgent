@@ -39,6 +39,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.0.0",
+    "concurrently": "^9.2.1",
     "ts-node": "^10.9.0",
     "typescript": "^5.0.0"
   }

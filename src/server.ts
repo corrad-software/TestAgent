@@ -111,6 +111,84 @@ function makeRunId(testType: string): string {
 }
 
 // ─── Run one test type (shared logic) ────────────────────────────────────────
+// ─── Pre-flight login check ──────────────────────────────────────────────────
+async function checkLogin(
+  authConfig: { loginUrl: string; email: string; password: string },
+  onLog: (msg: string) => void,
+  headed = false
+): Promise<boolean> {
+  onLog(`🔐 [AUTH] Checking login at ${authConfig.loginUrl}…`);
+  const browser = await chromium.launch({ headless: !headed });
+  const page = await browser.newPage();
+  try {
+    await page.goto(authConfig.loginUrl, { timeout: 20000 });
+    onLog(`🔐 [AUTH] Login page loaded`);
+
+    // Find email/username field
+    const emailSelectors = [
+      'input[type="email"]', 'input[name="email"]', 'input[name="username"]',
+      'input[name="userId"]', 'input[id*="email"]', 'input[id*="user"]', 'input[id*="login"]',
+    ];
+    let emailField = null;
+    for (const sel of emailSelectors) {
+      const el = page.locator(sel).first();
+      if (await el.count() > 0) { emailField = el; break; }
+    }
+    if (!emailField) {
+      onLog(`❌ [AUTH] Could not find email/username field on login page`);
+      return false;
+    }
+
+    await emailField.fill(authConfig.email);
+    onLog(`🔐 [AUTH] Filled username: ${authConfig.email}`);
+
+    // Password field
+    const passField = page.locator('input[type="password"]').first();
+    if (await passField.count() === 0) {
+      onLog(`❌ [AUTH] Could not find password field on login page`);
+      return false;
+    }
+    await passField.fill(authConfig.password);
+    onLog(`🔐 [AUTH] Filled password`);
+
+    // Submit
+    const submitBtn = page.locator('button[type="submit"]').first();
+    if (await submitBtn.count() > 0) {
+      await submitBtn.click();
+    } else {
+      const roleBtn = page.getByRole('button', { name: /sign.?in|log.?in|login|submit|masuk/i }).first();
+      if (await roleBtn.count() > 0) {
+        await roleBtn.click();
+      } else {
+        onLog(`❌ [AUTH] Could not find login/submit button`);
+        return false;
+      }
+    }
+    onLog(`🔐 [AUTH] Clicked login button, waiting for redirect…`);
+
+    // Wait for URL to change
+    await page.waitForURL(u => u.href !== authConfig.loginUrl, { timeout: 15000 });
+    const newUrl = page.url();
+    onLog(`✅ [AUTH] Login successful! Redirected to: ${newUrl}`);
+
+    // Save session for Playwright tests
+    await fs.mkdir(".auth", { recursive: true });
+    await page.context().storageState({ path: ".auth/state.json" });
+    onLog(`🔐 [AUTH] Session saved`);
+    return true;
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes("Timeout") || msg.includes("timeout")) {
+      onLog(`❌ [AUTH] Login failed — page did not redirect after login (timeout). Check credentials or login URL.`);
+    } else {
+      onLog(`❌ [AUTH] Login failed — ${msg}`);
+    }
+    return false;
+  } finally {
+    await browser.close();
+  }
+}
+
 async function runOneType(
   testType: TestType,
   url: string,
@@ -120,6 +198,15 @@ async function runOneType(
   onLog: (msg: string) => void,
   headed = false
 ): Promise<void> {
+  // Pre-flight login check
+  if (authConfig) {
+    const loginOk = await checkLogin(authConfig, onLog, headed);
+    if (!loginOk) {
+      send({ type: "result", passed: false, summary: "Login failed — test skipped", steps: [], reportId: null, reportUrl: null, testType });
+      return;
+    }
+  }
+
   if (testType === "quick") {
     const browser = await chromium.launch({ headless: !headed });
     const page = await browser.newPage();
