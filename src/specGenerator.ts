@@ -67,7 +67,7 @@ function buildAuthBeforeAll(): string {
   test.use({ storageState: '.auth/state.json' });`.trim();
 }
 
-function injectAuthIntoSpec(
+export function injectAuthIntoSpec(
   spec: string,
   authConfig: { loginUrl: string; email: string; password: string }
 ): string {

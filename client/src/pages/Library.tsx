@@ -448,9 +448,13 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
   onRefresh: () => void;
 }) {
   const [running, setRunning]     = useState(false);
+  const [recording, setRecording] = useState(false);
   const [logs, setLogs]           = useState<string[]>([]);
   const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
+  const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
+  const [useRecorded, setUseRecorded]   = useState(!!s.customSpec);
+  const [showCode, setShowCode]         = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   const { data: history } = useQuery({
@@ -480,7 +484,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
     try {
       const res = await fetch(`/library/scenarios/${s.id}/run`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headed }),
+        body: JSON.stringify({ headed, useCustomSpec: useRecorded && !!recordedCode }),
       });
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
@@ -517,6 +521,58 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
     } finally {
       setRunning(false);
     }
+  }
+
+  async function record() {
+    setRecording(true);
+    setResult(null);
+    setLogs(["🎬 Starting Playwright Recorder..."]);
+    try {
+      const res = await fetch(`/library/scenarios/${s.id}/record`, { method: "POST" });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "log") setLogs(prev => [...prev, ev.message]);
+            if (ev.type === "codeGenerated" && ev.code) {
+              setRecordedCode(ev.code);
+              setShowCode(true);
+              // Auto-save to DB
+              await fetch(`/library/scenarios/${s.id}/custom-spec`, {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ customSpec: ev.code }),
+              });
+              setUseRecorded(true);
+              onRefresh();
+            }
+            if (ev.type === "recordEnd") {
+              setLogs(prev => [...prev, "🎬 Recording session ended"]);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
+    } finally {
+      setRecording(false);
+    }
+  }
+
+  async function deleteCustomSpec() {
+    if (!confirm("Delete the recorded spec? This cannot be undone.")) return;
+    await fetch(`/library/scenarios/${s.id}/custom-spec`, { method: "DELETE" });
+    setRecordedCode(null);
+    setUseRecorded(false);
+    setShowCode(false);
+    onRefresh();
   }
 
   const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
@@ -632,18 +688,61 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
             {/* Spacer */}
             <div className="flex-1" />
 
+            {/* Spec toggle */}
+            {recordedCode && (
+              <div className="flex items-center gap-1 bg-gray-950 rounded-lg p-0.5">
+                <button onClick={() => setUseRecorded(false)}
+                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${!useRecorded ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
+                  Template
+                </button>
+                <button onClick={() => setUseRecorded(true)}
+                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${useRecorded ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
+                  Recorded
+                </button>
+              </div>
+            )}
+
             {/* Run buttons */}
             <div className="flex gap-2">
-              <button onClick={() => run(false)} disabled={running}
+              <button onClick={() => run(false)} disabled={running || recording}
                 className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition">
                 {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Run
+                Run{useRecorded && recordedCode ? " (Rec)" : ""}
               </button>
-              <button onClick={() => run(true)} disabled={running} title="Run with visible browser"
+              <button onClick={() => run(true)} disabled={running || recording} title="Run with visible browser"
                 className="flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg transition">
                 <Monitor className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            {/* Record button */}
+            <button onClick={record} disabled={running || recording}
+              className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 disabled:opacity-50 text-red-400 py-2 rounded-lg transition">
+              {recording ? (
+                <><Loader className="w-3.5 h-3.5 animate-spin" /> Recording...</>
+              ) : (
+                <><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Record</>
+              )}
+            </button>
+
+            {/* Recorded spec viewer */}
+            {recordedCode && (
+              <div className="space-y-1.5">
+                <button onClick={() => setShowCode(!showCode)}
+                  className="text-xs text-gray-500 hover:text-gray-300 transition flex items-center gap-1">
+                  {showCode ? "▾" : "▸"} Recorded Spec ({recordedCode.split("\n").length} lines)
+                </button>
+                {showCode && (
+                  <div className="relative">
+                    <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 max-h-32 overflow-auto whitespace-pre-wrap">{recordedCode}</pre>
+                    <button onClick={deleteCustomSpec}
+                      className="absolute top-1.5 right-1.5 text-xs text-gray-600 hover:text-red-400 transition" title="Delete recorded spec">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Report link */}
             {effectiveReportUrl && (

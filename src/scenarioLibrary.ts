@@ -26,6 +26,7 @@ export interface Scenario {
   testCaseId?: string; scenarioRefId?: string;
   name: string; url: string; testTypes: TestType[];
   description?: string; tags: string[]; authConfig?: ScenarioAuthConfig;
+  customSpec?: string;
   createdAt: string; updatedAt: string;
 }
 export interface RunRecord {
@@ -65,6 +66,7 @@ function mapScenario(s: any): Scenario {
            description: s.description ?? undefined,
            tags: parseJson<string[]>(s.tags, []),
            authConfig: parseJson<ScenarioAuthConfig | undefined>(s.authConfig, undefined),
+           customSpec: s.customSpec ?? undefined,
            createdAt: s.createdAt instanceof Date ? s.createdAt.toISOString() : s.createdAt,
            updatedAt: s.updatedAt instanceof Date ? s.updatedAt.toISOString() : s.updatedAt };
 }
@@ -132,6 +134,7 @@ export async function createScenario(data: Omit<Scenario, "id" | "createdAt" | "
       description: data.description,
       tags: JSON.stringify(data.tags ?? []),
       authConfig: data.authConfig ? JSON.stringify(data.authConfig) : null,
+      customSpec: data.customSpec ?? null,
     },
   });
   return mapScenario(s);
@@ -141,6 +144,7 @@ export async function updateScenario(id: string, data: Partial<Omit<Scenario, "i
   if (data.testTypes !== undefined) update.testTypes = JSON.stringify(data.testTypes);
   if (data.tags      !== undefined) update.tags      = JSON.stringify(data.tags);
   if (data.authConfig !== undefined) update.authConfig = data.authConfig ? JSON.stringify(data.authConfig) : null;
+  if (data.customSpec !== undefined) update.customSpec = data.customSpec ?? null;
   const s = await prisma.scenario.update({ where: { id }, data: update });
   return mapScenario(s);
 }

@@ -58,6 +58,7 @@ model Scenario {
   description   String?
   tags          String   @default("[]")
   authConfig    String?
+  customSpec    String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

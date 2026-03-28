@@ -19,6 +19,7 @@ export interface Scenario {
   name: string; url: string; testTypes: string[];
   description?: string; tags: string[];
   authConfig?: { loginUrl: string; email: string; password: string };
+  customSpec?: string;
   createdAt: string; updatedAt: string;
 }
 export interface RunRecord {

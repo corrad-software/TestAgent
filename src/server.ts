@@ -3,6 +3,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs/promises";
+import { spawn } from "child_process";
 import { chromium } from "playwright";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -10,7 +11,7 @@ import { runBasicTest } from "./basicTest";
 import { getAppSettings, updateAppSettings, maskSettings } from "./appSettings";
 import { requireAuth, requireAdmin, hashPassword, verifyPassword, signToken, seedAdminIfNeeded, COOKIE_NAME, COOKIE_OPTS } from "./auth";
 import { prisma } from "./db";
-import { generateSpec } from "./specGenerator";
+import { generateSpec, injectAuthIntoSpec } from "./specGenerator";
 import { runPlaywrightTest } from "./testRunner";
 import { TestType } from "./testSuites";
 import type { TestReport } from "./reporter";
@@ -197,7 +198,8 @@ async function runOneType(
   authConfig: { loginUrl: string; email: string; password: string } | undefined,
   send: (data: object) => void,
   onLog: (msg: string) => void,
-  headed = false
+  headed = false,
+  customSpec?: string,
 ): Promise<void> {
   // Pre-flight login check
   if (authConfig) {
@@ -219,7 +221,16 @@ async function runOneType(
     }
   } else {
     const runId = makeRunId(testType);
-    const specContent = await generateSpec({ testType, url, description, authConfig, onLog });
+    let specContent: string;
+    if (customSpec) {
+      onLog(`📝 Using recorded spec (custom)`);
+      specContent = customSpec;
+      if (authConfig) {
+        specContent = injectAuthIntoSpec(specContent, authConfig);
+      }
+    } else {
+      specContent = await generateSpec({ testType, url, description, authConfig, onLog });
+    }
     const specDir = path.join(process.cwd(), "generated-tests");
     await fs.mkdir(specDir, { recursive: true });
     const specPath = path.join(specDir, `${runId}.spec.ts`);
@@ -369,8 +380,9 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const { url, description, authConfig } = scenario;
+    const { url, description, authConfig, customSpec } = scenario;
     const headed: boolean = req.body?.headed === true;
+    const useCustomSpec: boolean = req.body?.useCustomSpec === true && !!customSpec;
     const testTypes: TestType[] = scenario.testTypes?.length ? scenario.testTypes : ["smoke"];
 
     for (let i = 0; i < testTypes.length; i++) {
@@ -383,7 +395,7 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
           bufferedResult = data;
         } else { send(data); }
       };
-      await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed);
+      await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, useCustomSpec ? customSpec : undefined);
       await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
                            passed: lastPassed, summary: lastSummary,
                            reportId: lastReportId, durationMs: Date.now() - startedAt });
@@ -394,6 +406,93 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   } finally {
     res.end();
   }
+});
+
+// ─── Library: Record a scenario (Playwright Codegen via SSE) ────────────────
+app.post("/library/scenarios/:id/record", async (req, res) => {
+  const scenario = await getScenario(req.params.id);
+  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const specDir = path.join(process.cwd(), "generated-tests");
+    await fs.mkdir(specDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
+    const specPath = path.join(specDir, `record-${timestamp}.spec.ts`);
+
+    send({ type: "recordStart", message: "Opening browser with Playwright Recorder..." });
+    send({ type: "log", message: `🎬 Recording for: ${scenario.url}` });
+    send({ type: "log", message: "Perform your actions in the browser. Close the browser when done." });
+
+    const args = ["playwright", "codegen", scenario.url, "-o", specPath, "--target", "playwright-test"];
+    const proc = spawn("npx", args, {
+      cwd: process.cwd(),
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      const lines = chunk.toString().split("\n").filter(l => l.trim());
+      for (const line of lines) send({ type: "log", message: line });
+    });
+
+    proc.stderr.on("data", (chunk: Buffer) => {
+      const lines = chunk.toString().split("\n").filter(l => l.trim());
+      for (const line of lines) {
+        if (!line.includes("Browsing context") && !line.includes("bidi")) {
+          send({ type: "log", message: `[recorder] ${line}` });
+        }
+      }
+    });
+
+    proc.on("close", async (code) => {
+      try {
+        const specContent = await fs.readFile(specPath, "utf-8");
+        if (specContent.trim().length > 0) {
+          send({ type: "log", message: `✅ Recording complete (${specContent.split("\n").length} lines)` });
+          send({ type: "codeGenerated", code: specContent });
+        } else {
+          send({ type: "log", message: "⚠️ No actions recorded — file is empty" });
+          send({ type: "codeGenerated", code: "" });
+        }
+      } catch {
+        send({ type: "log", message: code === 0
+          ? "⚠️ Browser closed but no code was generated"
+          : `❌ Recorder exited with code ${code}` });
+        send({ type: "codeGenerated", code: "" });
+      }
+      send({ type: "recordEnd" });
+      res.end();
+    });
+
+    proc.on("error", (err) => {
+      send({ type: "log", message: `❌ Recorder error: ${err.message}` });
+      send({ type: "recordEnd" });
+      res.end();
+    });
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+    res.end();
+  }
+});
+
+// ─── Library: Save / Delete custom spec ─────────────────────────────────────
+app.put("/library/scenarios/:id/custom-spec", async (req, res) => {
+  try {
+    const s = await updateScenario(req.params.id, { customSpec: req.body.customSpec });
+    res.json(s);
+  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/scenarios/:id/custom-spec", async (req, res) => {
+  try {
+    await updateScenario(req.params.id, { customSpec: undefined } as any);
+    res.json({ ok: true });
+  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
 });
 
 // ─── Projects: Members ───────────────────────────────────────────────────────
