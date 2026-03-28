@@ -58,13 +58,14 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 // SPA catch-all: serve index.html for client-side routes (before auth middleware)
 app.use((req, res, next) => {
-  // Skip API paths, file requests, and auth endpoints
+  // Serve index.html for browser navigation requests (not API/fetch calls)
+  const isApiCall = req.headers.accept && !req.headers.accept.includes("text/html");
   if (
     req.method !== "GET" ||
+    isApiCall ||
     req.path.startsWith("/auth/") ||
     req.path.startsWith("/library/") ||
     req.path.startsWith("/run-test") ||
-    req.path.startsWith("/app-settings") ||
     req.path.startsWith("/ai/") ||
     req.path.startsWith("/reports") ||
     req.path.startsWith("/playwright-report") ||
