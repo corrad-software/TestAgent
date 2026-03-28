@@ -40,10 +40,18 @@ const STACK: { category: string; items: Tech[] }[] = [
     ],
   },
   {
-    category: "Testing",
+    category: "Testing & Recording",
     items: [
-      { name: "Playwright", version: "1.58", description: "Browser automation & E2E testing", url: "https://playwright.dev", color: "bg-green-900/40 text-green-300" },
-      { name: "Vitest", version: "4", description: "Unit & integration test framework", url: "https://vitest.dev", color: "bg-amber-900/40 text-amber-300" },
+      { name: "Playwright", version: "1.58", description: "Browser automation, E2E testing & Codegen recorder", url: "https://playwright.dev", color: "bg-green-900/40 text-green-300" },
+      { name: "Vitest", version: "4", description: "Unit & integration test framework (59 tests)", url: "https://vitest.dev", color: "bg-amber-900/40 text-amber-300" },
+      { name: "Recharts", version: "2", description: "Dashboard charts (pass rate, runs/day)", url: "https://recharts.org", color: "bg-pink-900/40 text-pink-300" },
+    ],
+  },
+  {
+    category: "AI Assistance",
+    items: [
+      { name: "Claude API", version: "Haiku", description: "AI assertion enrichment & failure explanation", url: "https://docs.anthropic.com", color: "bg-violet-900/40 text-violet-300" },
+      { name: "@anthropic-ai/sdk", version: "0.39", description: "Anthropic SDK for Node.js", url: "https://github.com/anthropics/anthropic-sdk-typescript", color: "bg-violet-900/40 text-violet-300" },
     ],
   },
   {
@@ -56,7 +64,7 @@ const STACK: { category: string; items: Tech[] }[] = [
   {
     category: "Utilities",
     items: [
-      { name: "xlsx (SheetJS)", version: "0.18", description: "Excel/CSV file parsing & generation", url: "https://sheetjs.com", color: "bg-emerald-900/40 text-emerald-300" },
+      { name: "xlsx (SheetJS)", version: "0.18", description: "Excel/CSV parsing, DSSB import", url: "https://sheetjs.com", color: "bg-emerald-900/40 text-emerald-300" },
       { name: "multer", version: "2", description: "File upload middleware", url: "https://github.com/expressjs/multer", color: "bg-gray-800 text-gray-300" },
       { name: "dotenv", version: "16", description: "Environment variable loading", url: "https://github.com/motdotla/dotenv", color: "bg-yellow-900/40 text-yellow-300" },
     ],
@@ -72,17 +80,22 @@ export default function TechStack() {
         {/* Architecture overview */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
           <h2 className="text-sm font-semibold text-white mb-3">Architecture</h2>
-          <div className="flex items-center justify-center gap-3 text-xs flex-wrap">
+          <div className="flex items-center justify-center gap-2 text-xs flex-wrap">
             <span className="bg-sky-900/30 text-sky-300 px-3 py-1.5 rounded-lg border border-sky-800/50">React SPA</span>
             <span className="text-gray-600">→</span>
             <span className="bg-gray-800 text-gray-300 px-3 py-1.5 rounded-lg border border-gray-700">Express API</span>
             <span className="text-gray-600">→</span>
             <span className="bg-indigo-900/30 text-indigo-300 px-3 py-1.5 rounded-lg border border-indigo-800/50">Prisma + SQLite</span>
-            <span className="text-gray-600 mx-2">|</span>
-            <span className="bg-green-900/30 text-green-300 px-3 py-1.5 rounded-lg border border-green-800/50">Playwright</span>
+          </div>
+          <div className="flex items-center justify-center gap-2 text-xs flex-wrap mt-2">
+            <span className="bg-green-900/30 text-green-300 px-3 py-1.5 rounded-lg border border-green-800/50">Playwright + Codegen</span>
+            <span className="text-gray-600">|</span>
+            <span className="bg-violet-900/30 text-violet-300 px-3 py-1.5 rounded-lg border border-violet-800/50">Claude AI (Haiku)</span>
+            <span className="text-gray-600">|</span>
+            <span className="bg-pink-900/30 text-pink-300 px-3 py-1.5 rounded-lg border border-pink-800/50">Recharts</span>
           </div>
           <p className="text-xs text-gray-600 text-center mt-3">
-            Single server serves both API and built React client. Playwright runs browser tests against target applications.
+            Single server serves API + React client. Playwright Codegen records tests. AI enriches specs with assertions. Dashboard visualizes results.
           </p>
         </div>
 
@@ -118,12 +131,16 @@ export default function TechStack() {
         </div>
 
         {/* Footer stats */}
-        <div className="mt-8 border-t border-gray-800 pt-4 flex flex-wrap gap-6 text-xs text-gray-600">
+        <div className="mt-8 border-t border-gray-800 pt-4 flex flex-wrap gap-4 text-xs text-gray-600">
           <span>59 unit/integration tests</span>
-          <span>Prisma migrations</span>
-          <span>JWT + bcrypt auth</span>
-          <span>SSE streaming for live test output</span>
+          <span>Playwright Codegen recorder</span>
+          <span>AI assertion enrichment</span>
           <span>DSSB Excel import</span>
+          <span>SSE live test streaming</span>
+          <span>Dashboard with charts</span>
+          <span>Search & filter</span>
+          <span>JWT + bcrypt auth</span>
+          <span>Token usage tracking</span>
         </div>
       </div>
     </div>

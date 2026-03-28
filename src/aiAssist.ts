@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import path from "path";
+import { getAppSettings } from "./appSettings";
 
 const client = new Anthropic();
 
@@ -14,9 +15,17 @@ interface UsageData {
   callCount: number;
 }
 
-// Haiku pricing: $0.80/M input, $4/M output
-const HAIKU_INPUT_COST  = 0.80 / 1_000_000;
-const HAIKU_OUTPUT_COST = 4.00 / 1_000_000;
+// Pricing per model (per million tokens)
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-haiku-4-5-20251001":  { input: 0.80, output: 4.00 },
+  "claude-sonnet-4-6":         { input: 3.00, output: 15.00 },
+  "claude-opus-4-6":           { input: 15.00, output: 75.00 },
+};
+
+function getModelCost(model: string) {
+  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-haiku-4-5-20251001"];
+  return { input: pricing.input / 1_000_000, output: pricing.output / 1_000_000 };
+}
 
 function loadUsage(): UsageData {
   try {
@@ -26,11 +35,12 @@ function loadUsage(): UsageData {
   }
 }
 
-function trackUsage(inputTokens: number, outputTokens: number) {
+function trackUsage(inputTokens: number, outputTokens: number, model: string) {
   const usage = loadUsage();
+  const cost = getModelCost(model);
   usage.totalInputTokens += inputTokens;
   usage.totalOutputTokens += outputTokens;
-  usage.totalCost += (inputTokens * HAIKU_INPUT_COST) + (outputTokens * HAIKU_OUTPUT_COST);
+  usage.totalCost += (inputTokens * cost.input) + (outputTokens * cost.output);
   usage.callCount += 1;
   try {
     fs.mkdirSync(path.dirname(USAGE_PATH), { recursive: true });
@@ -64,7 +74,9 @@ export async function enrichWithAssertions(
   onLog?: (msg: string) => void,
 ): Promise<string> {
   const log = onLog ?? (() => {});
-  log("🤖 [AI] Analyzing recorded code and adding assertions...");
+  const settings = await getAppSettings();
+  const model = settings.model || "claude-haiku-4-5-20251001";
+  log(`🤖 [AI] Analyzing recorded code and adding assertions (${model})...`);
 
   const userPrompt = `Here is a recorded Playwright test spec for ${url}:
 
@@ -77,12 +89,12 @@ ${description ? `Context: ${description}` : ""}
 Add expect() assertions after key actions to verify the page behaves correctly. Return the complete modified code.`;
 
   const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model,
     max_tokens: 4096,
     system: ASSERTION_SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });
-  trackUsage(response.usage.input_tokens, response.usage.output_tokens);
+  trackUsage(response.usage.input_tokens, response.usage.output_tokens, model);
 
   const textBlock = response.content.find(b => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
@@ -111,7 +123,9 @@ export async function explainFailure(
   onLog?: (msg: string) => void,
 ): Promise<string> {
   const log = onLog ?? (() => {});
-  log("🤖 [AI] Analyzing test failure...");
+  const settings = await getAppSettings();
+  const model = settings.model || "claude-haiku-4-5-20251001";
+  log(`🤖 [AI] Analyzing test failure (${model})...`);
 
   // Extract relevant error lines
   const errorLines = logs.split("\n")
@@ -120,12 +134,12 @@ export async function explainFailure(
     .join("\n");
 
   const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model,
     max_tokens: 500,
     system: "You explain test failures to beginners. Be concise, friendly, and practical in 3-5 sentences. Focus on what the user can fix.",
     messages: [{ role: "user", content: `Playwright test failed on ${url}.\nSummary: ${summary}\n\nError details:\n${errorLines || summary}\n\nExplain what went wrong and how to fix it.` }],
   });
-  trackUsage(response.usage.input_tokens, response.usage.output_tokens);
+  trackUsage(response.usage.input_tokens, response.usage.output_tokens, model);
 
   const textBlock = response.content.find(b => b.type === "text");
   return textBlock?.type === "text" ? textBlock.text.trim() : "Could not analyze the failure.";
