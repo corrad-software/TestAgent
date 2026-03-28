@@ -1,12 +1,13 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
   Layers, Inbox, FolderOpen, BarChart2, X, Loader,
-  CheckCircle2, ChevronLeft,
+  CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock,
 } from "lucide-react";
 import * as api from "../lib/api";
+import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
 
 export default function Library() {
   const qc = useQueryClient();
@@ -15,6 +16,7 @@ export default function Library() {
   const [activeModuleId,  setActiveModuleId]  = useState<string | null>(null);
   const [showScenarioModal, setShowScenarioModal] = useState(false);
   const [editingScenario,   setEditingScenario]   = useState<api.Scenario | null>(null);
+  const [selectedScenario,  setSelectedScenario]  = useState<api.Scenario | null>(null);
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
 
   const { data: projects = [] } = useQuery<api.Project[]>({
@@ -61,13 +63,17 @@ export default function Library() {
 
   // ── Scenario management ─────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
-  async function handleSaveScenario(data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">) {
+  async function handleSaveScenario(data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">): Promise<boolean> {
     setSaving(true);
     try {
-      editingScenario
+      const result = editingScenario
         ? await api.updateScenario(editingScenario.id, data)
         : await api.createScenario(data);
-      setShowScenarioModal(false); setEditingScenario(null); invalidate();
+      if (!editingScenario) setEditingScenario(result);
+      invalidate();
+      return true;
+    } catch {
+      return false;
     } finally { setSaving(false); }
   }
 
@@ -220,15 +226,12 @@ export default function Library() {
                   <span className="flex-1 min-w-0">Scenario</span>
                   <span className="w-14 shrink-0 text-center hidden md:block">Flow</span>
                   <span className="w-16 shrink-0 text-center">Status</span>
-                  <span className="w-24 shrink-0 text-right">Actions</span>
                 </div>
                 {scenarios.map((s: api.Scenario) => (
                   <ScenarioRow
                     key={s.id}
                     scenario={s}
-                    onEdit={() => { setEditingScenario(s); setShowScenarioModal(true); }}
-                    onDelete={() => { if (confirm(`Delete "${s.name}"?`)) deleteScenarioMut.mutate(s.id); }}
-                    onRefresh={invalidate}
+                    onSelect={() => setSelectedScenario(s)}
                   />
                 ))}
               </div>
@@ -247,7 +250,32 @@ export default function Library() {
           defaultModuleId={activeModuleId ?? ""}
           saving={saving}
           onSave={handleSaveScenario}
+          onBack={editingScenario ? () => {
+            setShowScenarioModal(false);
+            setSelectedScenario(editingScenario);
+            setEditingScenario(null);
+          } : undefined}
           onClose={() => { setShowScenarioModal(false); setEditingScenario(null); }}
+        />
+      )}
+
+      {/* Scenario Detail / Run Modal */}
+      {selectedScenario && (
+        <ScenarioDetailModal
+          scenario={selectedScenario}
+          onEdit={() => {
+            setSelectedScenario(null);
+            setEditingScenario(selectedScenario);
+            setShowScenarioModal(true);
+          }}
+          onDelete={() => {
+            if (confirm(`Delete "${selectedScenario.name}"?`)) {
+              deleteScenarioMut.mutate(selectedScenario.id);
+              setSelectedScenario(null);
+            }
+          }}
+          onClose={() => setSelectedScenario(null)}
+          onRefresh={invalidate}
         />
       )}
 
@@ -271,68 +299,24 @@ function EmptyState({ icon, text, sub, action }: { icon: React.ReactNode; text: 
   );
 }
 
-// ─── Scenario Row (list view) ────────────────────────────────────────────────
-function ScenarioRow({ scenario: s, onEdit, onDelete, onRefresh }: {
+// ─── Scenario Row (clickable list view) ──────────────────────────────────────
+function ScenarioRow({ scenario: s, onSelect }: {
   scenario: api.Scenario;
-  onEdit: () => void;
-  onDelete: () => void;
-  onRefresh: () => void;
+  onSelect: () => void;
 }) {
-  const [running,   setRunning]   = useState(false);
-  const [status,    setStatus]    = useState<{ text: string; color: string } | null>(null);
-  const [reportUrl, setReportUrl] = useState<string | null>(null);
-
   const { data: history } = useQuery({
     queryKey: ["history", s.id],
     queryFn: () => api.getScenarioHistory(s.id),
   });
-  const lastRun  = history?.[0];
-  const flowTag  = s.tags.find(t => t === "positif" || t === "negatif");
-
-  async function run(headed = false) {
-    setRunning(true);
-    setStatus({ text: headed ? "Opening browser…" : "Starting…", color: "text-gray-500" });
-    setReportUrl(null);
-    try {
-      const res = await fetch(`/library/scenarios/${s.id}/run`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headed }),
-      });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
-        for (const part of parts) {
-          if (!part.startsWith("data:")) continue;
-          try {
-            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log")    setStatus({ text: ev.message, color: "text-gray-500" });
-            if (ev.type === "result") {
-              setStatus({ text: ev.passed ? "Passed" : "Failed", color: ev.passed ? "text-green-400" : "text-red-400" });
-              if (ev.reportId) setReportUrl(`/playwright-report/${ev.reportId}/index.html`);
-              onRefresh();
-            }
-            if (ev.type === "error") setStatus({ text: `Error: ${ev.message}`, color: "text-red-400" });
-          } catch { /* skip */ }
-        }
-      }
-    } finally { setRunning(false); }
-  }
-
-  const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
-  const effectiveReportUrl = reportUrl ?? lastReportUrl;
+  const lastRun = history?.[0];
+  const flowTag = s.tags.find(t => t === "positif" || t === "negatif");
 
   return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/60 hover:bg-gray-900/70 transition group">
-      {/* Status indicator dot */}
+    <div onClick={onSelect}
+      className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/60 hover:bg-gray-900/70 cursor-pointer transition">
+      {/* Status dot */}
       <span className="w-6 flex justify-center shrink-0">
-        {running ? (
-          <Loader className="w-3 h-3 text-emerald-400 animate-spin" />
-        ) : lastRun ? (
+        {lastRun ? (
           <span className={`w-2 h-2 rounded-full ${lastRun.passed ? "bg-green-500" : "bg-red-500"}`} />
         ) : (
           <span className="w-2 h-2 rounded-full bg-gray-700" />
@@ -354,7 +338,7 @@ function ScenarioRow({ scenario: s, onEdit, onDelete, onRefresh }: {
         <p className="text-xs text-gray-200 truncate">{s.name && s.name.length > 60 ? s.name.slice(0, 60) + "…" : s.name}</p>
       </div>
 
-      {/* Flow tag */}
+      {/* Flow */}
       <div className="w-14 hidden md:flex justify-center shrink-0">
         {flowTag ? (
           <span className={`text-xs px-1.5 py-0.5 rounded ${flowTag === "positif" ? "bg-blue-900/40 text-blue-300" : "bg-orange-900/40 text-orange-300"}`}>
@@ -365,11 +349,7 @@ function ScenarioRow({ scenario: s, onEdit, onDelete, onRefresh }: {
 
       {/* Status */}
       <div className="w-16 text-center text-xs shrink-0">
-        {running ? (
-          <span className={`truncate block ${status?.color ?? "text-gray-500"}`}>{status?.text}</span>
-        ) : status ? (
-          <span className={status.color}>{status.text}</span>
-        ) : lastRun ? (
+        {lastRun ? (
           <span className={lastRun.passed ? "text-green-500" : "text-red-400"}>
             {lastRun.passed ? "Passed" : "Failed"}
           </span>
@@ -377,31 +357,264 @@ function ScenarioRow({ scenario: s, onEdit, onDelete, onRefresh }: {
           <span className="text-gray-700">—</span>
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* Actions */}
-      <div className="w-24 flex gap-1 justify-end shrink-0 opacity-0 group-hover:opacity-100 transition">
-        <button onClick={() => run(false)} disabled={running} title="Run headless"
-          className="w-6 h-6 flex items-center justify-center rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition disabled:opacity-50">
-          {running ? <Loader className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-        </button>
-        <button onClick={() => run(true)} disabled={running} title="Run headed"
-          className="w-6 h-6 flex items-center justify-center rounded bg-teal-900/30 hover:bg-teal-900/60 text-teal-400 transition disabled:opacity-50">
-          <Monitor className="w-3 h-3" />
-        </button>
-        {effectiveReportUrl && (
-          <a href={effectiveReportUrl} target="_blank" rel="noreferrer" title="View report"
-            className="w-6 h-6 flex items-center justify-center rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition">
-            <BarChart2 className="w-3 h-3" />
-          </a>
-        )}
-        <button onClick={onEdit} title="Edit"
-          className="w-6 h-6 flex items-center justify-center rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition">
-          <Pencil className="w-3 h-3" />
-        </button>
-        <button onClick={onDelete} title="Delete"
-          className="w-6 h-6 flex items-center justify-center rounded bg-gray-800 hover:bg-red-900/50 text-gray-500 hover:text-red-400 transition">
-          <Trash2 className="w-3 h-3" />
-        </button>
+// ─── Scenario Detail / Run Modal ─────────────────────────────────────────────
+function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh }: {
+  scenario: api.Scenario;
+  onEdit: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  const [running, setRunning]     = useState(false);
+  const [logs, setLogs]           = useState<string[]>([]);
+  const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
+  const [reportUrl, setReportUrl] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  const { data: history } = useQuery({
+    queryKey: ["history", s.id],
+    queryFn: () => api.getScenarioHistory(s.id),
+  });
+  const lastRun = history?.[0];
+  const flowTag = s.tags.find(t => t === "positif" || t === "negatif");
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs]);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape" && !running) onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [running, onClose]);
+
+  async function run(headed = false) {
+    setRunning(true);
+    setResult(null);
+    setReportUrl(null);
+    setLogs([headed ? "▶ Starting test (headed)…" : "▶ Starting test (headless)…"]);
+    try {
+      const res = await fetch(`/library/scenarios/${s.id}/run`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headed }),
+      });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "log") {
+              setLogs(prev => [...prev, ev.message]);
+            }
+            if (ev.type === "result") {
+              const text = ev.passed ? "✅ Test Passed" : "❌ Test Failed";
+              setResult({ passed: ev.passed, text });
+              setLogs(prev => [...prev, "", text]);
+              if (ev.reportId) setReportUrl(`/playwright-report/${ev.reportId}/index.html`);
+              onRefresh();
+            }
+            if (ev.type === "error") {
+              setResult({ passed: false, text: `Error: ${ev.message}` });
+              setLogs(prev => [...prev, `❌ Error: ${ev.message}`]);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
+      setResult({ passed: false, text: (err as Error).message });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
+  const effectiveReportUrl = reportUrl ?? lastReportUrl;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-4 border-b border-gray-800 shrink-0">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-semibold text-white leading-tight">{s.name}</h2>
+            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+              {s.testCaseId && (
+                <span className="text-xs text-gray-400 font-mono">{s.testCaseId}</span>
+              )}
+              {s.scenarioRefId && (
+                <span className="text-xs text-gray-500 font-mono">{s.scenarioRefId}</span>
+              )}
+              {flowTag && (
+                <span className={`text-xs px-1.5 py-0.5 rounded ${flowTag === "positif" ? "bg-blue-900/40 text-blue-300" : "bg-orange-900/40 text-orange-300"}`}>
+                  {flowTag === "positif" ? "Positif" : "Negatif"}
+                </span>
+              )}
+              {lastRun && (
+                <span className="text-xs text-gray-600 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  Last run {relativeTime(lastRun.runAt)} — <span className={lastRun.passed ? "text-green-500" : "text-red-400"}>{lastRun.passed ? "Passed" : "Failed"}</span>
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none ml-4">&times;</button>
+        </div>
+
+        {/* Body — two columns */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+
+          {/* Left: Details + Actions */}
+          <div className="w-72 shrink-0 border-r border-gray-800 p-4 flex flex-col gap-3 overflow-y-auto min-h-0">
+            {/* URL */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">URL</p>
+              <a href={s.url} target="_blank" rel="noreferrer"
+                className="text-xs text-emerald-400 hover:underline flex items-center gap-1 truncate">
+                {s.url} <ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+            </div>
+
+            {/* Test Types */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Test Types</p>
+              <div className="flex flex-col gap-1">
+                {s.testTypes.map(t => {
+                  const passed = lastRun?.passed;
+                  return (
+                    <div key={t} className="flex items-center gap-2">
+                      {lastRun ? (
+                        passed
+                          ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                          : <X className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                      ) : (
+                        <span className="w-3.5 h-3.5 rounded-full border border-gray-700 shrink-0" />
+                      )}
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${SUITE_COLORS[t] ?? "bg-gray-800 text-gray-400"}`}>
+                        {SUITE_LABELS[t] ?? t}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Description */}
+            {s.description && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Description</p>
+                <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-28 overflow-y-auto leading-relaxed">{s.description}</p>
+              </div>
+            )}
+
+            {/* Tags */}
+            {s.tags.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Tags</p>
+                <div className="flex flex-wrap gap-1">
+                  {s.tags.map(t => (
+                    <span key={t} className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <Tag className="w-2.5 h-2.5" />{t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Auth info */}
+            {s.authConfig && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Login</p>
+                <p className="text-xs text-gray-400 font-mono">{s.authConfig.email}</p>
+                <p className="text-xs text-gray-600 truncate">{s.authConfig.loginUrl}</p>
+              </div>
+            )}
+
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Run buttons */}
+            <div className="flex gap-2">
+              <button onClick={() => run(false)} disabled={running}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition">
+                {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                Run
+              </button>
+              <button onClick={() => run(true)} disabled={running} title="Run with visible browser"
+                className="flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg transition">
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Report link */}
+            {effectiveReportUrl && (
+              <a href={effectiveReportUrl} target="_blank" rel="noreferrer"
+                className="flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition">
+                <BarChart2 className="w-3.5 h-3.5" /> View Report
+              </a>
+            )}
+
+            {/* Edit / Delete */}
+            <div className="flex gap-2 pt-2 border-t border-gray-800">
+              <button onClick={onEdit}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 py-1.5 rounded-lg transition">
+                <Pencil className="w-3 h-3" /> Edit
+              </button>
+              <button onClick={onDelete}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-red-900/50 text-gray-500 hover:text-red-400 py-1.5 rounded-lg transition">
+                <Trash2 className="w-3 h-3" /> Delete
+              </button>
+            </div>
+          </div>
+
+          {/* Right: Live log terminal */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between shrink-0">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Test Output</span>
+              {running && (
+                <span className="text-xs text-emerald-400 flex items-center gap-1.5">
+                  <Loader className="w-3 h-3 animate-spin" /> Running…
+                </span>
+              )}
+              {result && !running && (
+                <span className={`text-xs font-semibold ${result.passed ? "text-green-400" : "text-red-400"}`}>
+                  {result.text}
+                </span>
+              )}
+            </div>
+            <div ref={logRef}
+              className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed bg-gray-950">
+              {logs.length === 0 ? (
+                <p className="text-gray-700 italic">Click "Run" to start a test…</p>
+              ) : (
+                logs.map((line, i) => (
+                  <div key={i} className={`whitespace-pre-wrap ${
+                    line.startsWith("✅") ? "text-green-400 font-semibold" :
+                    line.startsWith("❌") ? "text-red-400 font-semibold" :
+                    line.startsWith("▶") ? "text-emerald-400" :
+                    line.startsWith("[AUTH]") ? "text-amber-400" :
+                    line.startsWith("[stderr]") ? "text-orange-400" :
+                    "text-gray-400"
+                  }`}>{line}</div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -417,14 +630,15 @@ const TEST_TYPES = [
   { value: "quick",         label: "⚡ Quick" },
 ];
 
-function ScenarioModal({ scenario, project, members, roles, defaultModuleId, saving, onSave, onClose }: {
+function ScenarioModal({ scenario, project, members, roles, defaultModuleId, saving, onSave, onBack, onClose }: {
   scenario: api.Scenario | null;
   project: api.Project;
   members: api.Member[];
   roles: api.ProjectRole[];
   defaultModuleId: string;
   saving: boolean;
-  onSave: (data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">) => void;
+  onSave: (data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">) => Promise<boolean>;
+  onBack?: () => void;
   onClose: () => void;
 }) {
   const projectModules = project.modules ?? [];
@@ -442,39 +656,76 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
   const [loginUrl,    setLoginUrl]    = useState(scenario?.authConfig?.loginUrl ?? "");
   const [loginEmail,  setLoginEmail]  = useState(scenario?.authConfig?.email ?? "");
   const [loginPass,   setLoginPass]   = useState(scenario?.authConfig?.password ?? "");
+  const [savedAt,     setSavedAt]     = useState<number | null>(null);
+
+  // Snapshot of last saved values for dirty tracking
+  const [snapshot, setSnapshot] = useState(() => getFormValues());
+
+  function getFormValues() {
+    return JSON.stringify({ moduleId, testCaseId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass });
+  }
+
+  const isDirty = () => getFormValues() !== snapshot;
+
+  function confirmAndClose(action: () => void) {
+    if (isDirty()) {
+      if (confirm("You have unsaved changes. Discard them?")) action();
+    } else {
+      action();
+    }
+  }
+
+  // Auto-hide saved message after 3s
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(null), 3000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
 
   const toggleType = (t: string) =>
     setTestTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
-  function submit() {
+  async function submit() {
     if (!moduleId || !name.trim() || !url.trim() || !testTypes.length) {
       alert("Module, name, URL, and at least one test type are required."); return;
     }
     const authConfig = (loginUrl && loginEmail && loginPass)
       ? { loginUrl, email: loginEmail, password: loginPass } : undefined;
-    onSave({
+    const ok = await onSave({
       moduleId, name: name.trim(), url: url.trim(), testTypes: testTypes as any,
       testCaseId: testCaseId.trim() || undefined, scenarioRefId: scenarioRefId.trim() || undefined,
       description: description.trim() || undefined,
       tags: tags.split(",").map(t => t.trim()).filter(Boolean),
       authConfig, assigneeId: assigneeId || undefined, roleId: roleId || undefined,
     });
+    if (ok) {
+      setSavedAt(Date.now());
+      setSnapshot(getFormValues());
+    }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Header with breadcrumb */}
+        {/* Header with breadcrumb + back button */}
         <div className="flex items-center justify-between px-6 py-3 border-b border-gray-800 shrink-0">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-0.5">
-              <span>{project.name}</span>
-              <span className="text-gray-700">/</span>
-              <span>{projectModules.find(m => m.id === moduleId)?.name ?? "Select module"}</span>
+          <div className="flex items-center gap-3">
+            {onBack && (
+              <button onClick={() => confirmAndClose(onBack)}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-200 transition">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            )}
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-0.5">
+                <span>{project.name}</span>
+                <span className="text-gray-700">/</span>
+                <span>{projectModules.find(m => m.id === moduleId)?.name ?? "Select module"}</span>
+              </div>
+              <h2 className="text-sm font-semibold text-white">{scenario ? "Edit Scenario" : "New Scenario"}</h2>
             </div>
-            <h2 className="text-sm font-semibold text-white">{scenario ? "Edit Scenario" : "New Scenario"}</h2>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
+          <button onClick={() => confirmAndClose(onClose)} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
         </div>
 
         {/* Two-column body */}
@@ -603,13 +854,18 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-800 flex gap-3 shrink-0">
+        <div className="px-6 py-3 border-t border-gray-800 flex items-center gap-3 shrink-0">
           <button onClick={submit} disabled={saving}
             className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition">
-            {saving ? "Saving…" : "Save Scenario"}
+            {saving ? "Saving…" : "Save"}
           </button>
-          <button onClick={onClose}
-            className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">Cancel</button>
+          <button onClick={() => confirmAndClose(onBack ?? onClose)}
+            className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">{onBack ? "Back" : "Cancel"}</button>
+          {savedAt && (
+            <span className="text-xs text-green-400 flex items-center gap-1 ml-auto">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Saved
+            </span>
+          )}
         </div>
       </div>
     </div>
