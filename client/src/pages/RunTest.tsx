@@ -108,7 +108,7 @@ export default function RunTest() {
   return (
     <div className="flex flex-col">
       {/* Topbar */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-8 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-3 flex items-center justify-between">
         <div>
           <h1 className="text-base font-semibold text-white">Quick Run Test</h1>
           <p className="text-xs text-gray-500 mt-0.5">Select a test type, enter a URL, and let the agent do the work</p>

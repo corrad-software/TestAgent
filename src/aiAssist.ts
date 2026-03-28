@@ -1,6 +1,46 @@
 import Anthropic from "@anthropic-ai/sdk";
+import fs from "fs";
+import path from "path";
 
 const client = new Anthropic();
+
+// ─── Token usage tracking ────────────────────────────────────────────────────
+const USAGE_PATH = path.join(process.cwd(), "data", "ai-usage.json");
+
+interface UsageData {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCost: number;
+  callCount: number;
+}
+
+// Haiku pricing: $0.80/M input, $4/M output
+const HAIKU_INPUT_COST  = 0.80 / 1_000_000;
+const HAIKU_OUTPUT_COST = 4.00 / 1_000_000;
+
+function loadUsage(): UsageData {
+  try {
+    return JSON.parse(fs.readFileSync(USAGE_PATH, "utf-8"));
+  } catch {
+    return { totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, callCount: 0 };
+  }
+}
+
+function trackUsage(inputTokens: number, outputTokens: number) {
+  const usage = loadUsage();
+  usage.totalInputTokens += inputTokens;
+  usage.totalOutputTokens += outputTokens;
+  usage.totalCost += (inputTokens * HAIKU_INPUT_COST) + (outputTokens * HAIKU_OUTPUT_COST);
+  usage.callCount += 1;
+  try {
+    fs.mkdirSync(path.dirname(USAGE_PATH), { recursive: true });
+    fs.writeFileSync(USAGE_PATH, JSON.stringify(usage, null, 2));
+  } catch { /* ignore write errors */ }
+}
+
+export function getUsage(): UsageData {
+  return loadUsage();
+}
 
 const ASSERTION_SYSTEM = `You are a Playwright test expert. Your job is to add expect() assertions to recorded Playwright test code.
 
@@ -42,6 +82,7 @@ Add expect() assertions after key actions to verify the page behaves correctly. 
     system: ASSERTION_SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });
+  trackUsage(response.usage.input_tokens, response.usage.output_tokens);
 
   const textBlock = response.content.find(b => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
@@ -84,6 +125,7 @@ export async function explainFailure(
     system: "You explain test failures to beginners. Be concise, friendly, and practical in 3-5 sentences. Focus on what the user can fix.",
     messages: [{ role: "user", content: `Playwright test failed on ${url}.\nSummary: ${summary}\n\nError details:\n${errorLines || summary}\n\nExplain what went wrong and how to fix it.` }],
   });
+  trackUsage(response.usage.input_tokens, response.usage.output_tokens);
 
   const textBlock = response.content.find(b => b.type === "text");
   return textBlock?.type === "text" ? textBlock.text.trim() : "Could not analyze the failure.";

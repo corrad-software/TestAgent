@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Lock, Shield, ChevronDown, ChevronRight, Send, Loader, Copy, CheckCircle2 } from "lucide-react";
+import PageHeader from "../components/PageHeader";
 
 interface Endpoint {
   method: "GET" | "POST" | "PUT" | "DELETE";
@@ -183,20 +184,14 @@ export default function ApiExplorer() {
 
   return (
     <div className="flex flex-col h-screen">
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-4 shrink-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-white">API Explorer</h1>
-            <p className="text-xs text-gray-500 mt-0.5">{totalEndpoints} endpoints across {ENDPOINTS.length} groups</p>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> GET</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500" /> POST</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" /> PUT</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /> DELETE</span>
-          </div>
+      <PageHeader title="API Explorer" subtitle={`${totalEndpoints} endpoints across ${ENDPOINTS.length} groups`}>
+        <div className="flex items-center gap-4 text-xs text-gray-500">
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> GET</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500" /> POST</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" /> PUT</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /> DELETE</span>
         </div>
-      </header>
+      </PageHeader>
 
       <div className="flex flex-1 min-h-0">
         {/* Endpoint list */}

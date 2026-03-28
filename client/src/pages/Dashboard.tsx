@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, TrendingUp, CheckCircle2, Calendar, ChevronDown } from "lucide-react";
+import PageHeader from "../components/PageHeader";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -62,12 +63,7 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-4 flex items-center justify-between shrink-0">
-        <div>
-          <h1 className="text-lg font-semibold text-white">Dashboard</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Test execution analytics</p>
-        </div>
+      <PageHeader title="Dashboard" subtitle="Test execution analytics">
         {projects.length > 0 && (
           <div className="relative">
             <select value={projectId} onChange={e => setProjectId(e.target.value)}
@@ -77,7 +73,7 @@ export default function Dashboard() {
             <ChevronDown className="w-3 h-3 text-gray-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
         )}
-      </header>
+      </PageHeader>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {!stats ? (

@@ -484,6 +484,14 @@ app.post("/library/scenarios/:id/record", async (req, res) => {
   }
 });
 
+// ─── AI usage tracking ──────────────────────────────────────────────────────
+app.get("/ai/usage", async (_req, res) => {
+  try {
+    const { getUsage } = await import("./aiAssist");
+    res.json(getUsage());
+  } catch { res.json({ totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, callCount: 0 }); }
+});
+
 // ─── Library: AI-assist endpoints ────────────────────────────────────────────
 app.post("/library/scenarios/:id/enrich", async (req, res) => {
   const scenario = await getScenario(req.params.id);

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime } from "../lib/utils";
+import PageHeader from "../components/PageHeader";
 
 export default function Projects() {
   const qc = useQueryClient();
@@ -63,27 +64,18 @@ export default function Projects() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-lg font-semibold text-white">Projects</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Select a project to manage scenarios</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition cursor-pointer">
-            <Upload className="w-3.5 h-3.5" />
-            Import Test Script
-            <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden"
-              onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
-          </label>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-          >
-            <Plus className="w-4 h-4" /> New Project
-          </button>
-        </div>
-      </header>
+      <PageHeader title="Projects" subtitle="Select a project to manage scenarios">
+        <label className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition cursor-pointer">
+          <Upload className="w-3.5 h-3.5" />
+          Import Test Script
+          <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden"
+            onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
+        </label>
+        <button onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">
+          <Plus className="w-4 h-4" /> New Project
+        </button>
+      </PageHeader>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">

@@ -1,4 +1,5 @@
 import { ExternalLink } from "lucide-react";
+import PageHeader from "../components/PageHeader";
 
 interface Tech {
   name: string;
@@ -65,10 +66,7 @@ const STACK: { category: string; items: Tech[] }[] = [
 export default function TechStack() {
   return (
     <div className="flex flex-col h-screen">
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-4 shrink-0">
-        <h1 className="text-lg font-semibold text-white">Tech Stack</h1>
-        <p className="text-xs text-gray-500 mt-0.5">Technologies powering TestAgent</p>
-      </header>
+      <PageHeader title="Tech Stack" subtitle="Technologies powering TestAgent" />
 
       <div className="flex-1 overflow-y-auto p-6">
         {/* Architecture overview */}
