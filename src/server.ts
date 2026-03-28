@@ -1,0 +1,753 @@
+import "dotenv/config";
+import express from "express";
+import cookieParser from "cookie-parser";
+import path from "path";
+import fs from "fs/promises";
+import { chromium } from "playwright";
+import multer from "multer";
+import * as XLSX from "xlsx";
+import { runBasicTest } from "./basicTest";
+import { getAppSettings, updateAppSettings, maskSettings } from "./appSettings";
+import { requireAuth, requireAdmin, hashPassword, verifyPassword, signToken, seedAdminIfNeeded, COOKIE_NAME, COOKIE_OPTS } from "./auth";
+import { prisma } from "./db";
+import { generateSpec } from "./specGenerator";
+import { runPlaywrightTest } from "./testRunner";
+import { TestType } from "./testSuites";
+import type { TestReport } from "./reporter";
+import {
+  getProjectTree,
+  getLibrary,
+  createProject,
+  updateProject,
+  deleteProject,
+  createModule,
+  updateModule,
+  deleteModule,
+  createScenario,
+  updateScenario,
+  deleteScenario,
+  getScenario,
+  getScenarioHistory,
+  addRunRecord,
+  getMembers,
+  createMember,
+  updateMember,
+  deleteMember,
+  getDashboardStats,
+  getRoles,
+  createRole,
+  updateRole,
+  deleteRole,
+} from "./scenarioLibrary";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+const app = express();
+app.use(express.json());
+app.use(cookieParser());
+
+// Serve React client (built output goes to client/dist)
+const clientDist = path.join(__dirname, "../client/dist");
+app.get("/favicon.ico", (_req, res) => res.redirect("/favicon.svg"));
+app.use(express.static(clientDist));
+
+// Serve legacy public dir as fallback during transition
+app.use(express.static(path.join(__dirname, "../public")));
+
+// Serve per-run Playwright HTML reports dynamically
+app.use("/playwright-report/:runId", (req, res, next) => {
+  const runId = req.params.runId;
+  if (!/^[\w-]+$/.test(runId)) { res.status(400).send("Invalid report ID"); return; }
+  express.static(path.join(process.cwd(), "playwright-reports", runId))(req, res, next);
+});
+
+// ─── Auth endpoints (public) ──────────────────────────────────────────────────
+app.post("/auth/login", async (req, res) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+  if (!email || !password) { res.status(400).json({ error: "Email and password required" }); return; }
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+  if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    res.status(401).json({ error: "Invalid email or password" }); return;
+  }
+  const token = signToken({ userId: user.id, email: user.email, role: user.role });
+  res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
+});
+
+app.post("/auth/logout", (_req, res) => {
+  res.clearCookie(COOKIE_NAME);
+  res.json({ ok: true });
+});
+
+app.get("/auth/me", requireAuth, async (req, res) => {
+  const { userId } = (req as any).user;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true } });
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
+  res.json(user);
+});
+
+// Change password
+app.put("/auth/password", requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+  if (!currentPassword || !newPassword) { res.status(400).json({ error: "Both passwords required" }); return; }
+  if (newPassword.length < 6) { res.status(400).json({ error: "New password must be at least 6 characters" }); return; }
+  const { userId } = (req as any).user;
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+    res.status(401).json({ error: "Current password is incorrect" }); return;
+  }
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(newPassword) } });
+  res.json({ ok: true });
+});
+
+// ─── Apply auth middleware to all subsequent routes ───────────────────────────
+app.use(requireAuth);
+
+// ─── Run ID generator ─────────────────────────────────────────────────────────
+function makeRunId(testType: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${testType}`;
+}
+
+// ─── Run one test type (shared logic) ────────────────────────────────────────
+async function runOneType(
+  testType: TestType,
+  url: string,
+  description: string | undefined,
+  authConfig: { loginUrl: string; email: string; password: string } | undefined,
+  send: (data: object) => void,
+  onLog: (msg: string) => void,
+  headed = false
+): Promise<void> {
+  if (testType === "quick") {
+    const browser = await chromium.launch({ headless: !headed });
+    const page = await browser.newPage();
+    try {
+      const result = await runBasicTest(page, url, onLog);
+      send({ type: "result", passed: result.passed, summary: result.summary, steps: result.steps, reportId: null, reportUrl: null, testType });
+    } finally {
+      await browser.close();
+    }
+  } else {
+    const runId = makeRunId(testType);
+    const specContent = await generateSpec({ testType, url, description, authConfig, onLog });
+    const specDir = path.join(process.cwd(), "generated-tests");
+    await fs.mkdir(specDir, { recursive: true });
+    const specPath = path.join(specDir, `${runId}.spec.ts`);
+    await fs.writeFile(specPath, specContent, "utf-8");
+    onLog(`🔧 Spec saved: generated-tests/${runId}.spec.ts`);
+    onLog(`🔧 Launching Playwright test runner…`);
+    const result = await runPlaywrightTest({ specPath, runId, onLog, headed });
+    send({ type: "result", passed: result.passed, summary: result.summary, steps: result.steps, reportId: runId, reportUrl: result.reportUrl, testType });
+  }
+}
+
+// ─── POST /run-test ───────────────────────────────────────────────────────────
+app.post("/run-test", async (req, res) => {
+  const { url, description, testTypes: rawTestTypes, testType: rawTestType, demo, loginUrl, email, password, headed } = req.body as {
+    url: string; description?: string; testTypes?: string[]; testType?: string;
+    demo?: boolean; loginUrl?: string; email?: string; password?: string; headed?: boolean;
+  };
+
+  const testTypes: TestType[] = demo
+    ? ["quick"]
+    : rawTestTypes?.length ? rawTestTypes as TestType[]
+    : [(rawTestType as TestType) ?? "smoke"];
+
+  const authConfig = (loginUrl && email && password) ? { loginUrl, email, password } : undefined;
+  if (!url) { res.status(400).json({ error: "url is required" }); return; }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const onLog = (msg: string) => send({ type: "log", message: msg });
+
+  try {
+    for (let i = 0; i < testTypes.length; i++) {
+      if (i > 0) send({ type: "separator", testType: testTypes[i] });
+      await runOneType(testTypes[i], url, description, authConfig, send, onLog, headed);
+    }
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+  } finally {
+    res.end();
+  }
+});
+
+// ─── GET /reports — legacy Quick Check JSON reports ───────────────────────────
+app.get("/reports", async (_req, res) => {
+  const dir = path.join(process.cwd(), "reports");
+  try {
+    const files = await fs.readdir(dir);
+    const reports = await Promise.all(
+      files.filter(f => f.endsWith(".json")).map(async f => {
+        const r = JSON.parse(await fs.readFile(path.join(dir, f), "utf-8")) as TestReport;
+        return { id: r.id, url: r.url, testType: r.testType, passed: r.passed, startedAt: r.startedAt, durationMs: r.durationMs, summary: r.summary, issueCount: r.issues.length, stepCount: r.steps.length };
+      })
+    );
+    reports.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    res.json(reports);
+  } catch { res.json([]); }
+});
+
+app.get("/reports/:id", async (req, res) => {
+  const p = path.join(process.cwd(), "reports", `${req.params.id}.html`);
+  try { await fs.access(p); res.sendFile(p); } catch { res.status(404).send("Not found"); }
+});
+app.get("/reports/:id/json", async (req, res) => {
+  const p = path.join(process.cwd(), "reports", `${req.params.id}.json`);
+  try { await fs.access(p); res.download(p); } catch { res.status(404).send("Not found"); }
+});
+
+// ─── App Settings (Admin only) ────────────────────────────────────────────────
+app.get("/app-settings",  requireAdmin, async (_req, res) => {
+  try { res.json(maskSettings(await getAppSettings())); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.put("/app-settings", requireAdmin, async (req, res) => {
+  try { res.json(maskSettings(await updateAppSettings(req.body))); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ─── Library: Projects ────────────────────────────────────────────────────────
+app.get("/library/projects", async (_req, res) => {
+  try { res.json(await getProjectTree()); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/projects",     requireAdmin, async (req, res) => {
+  try { res.json(await createProject(req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/projects/:id",  requireAdmin, async (req, res) => {
+  try { res.json(await updateProject(req.params.id as string, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/projects/:id", requireAdmin, async (req, res) => {
+  try { await deleteProject(req.params.id as string); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Modules ────────────────────────────────────────────────────────
+app.post("/library/modules",     requireAdmin, async (req, res) => {
+  try { res.json(await createModule(req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/modules/:id",  requireAdmin, async (req, res) => {
+  try { res.json(await updateModule(req.params.id as string, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/modules/:id", requireAdmin, async (req, res) => {
+  try { await deleteModule(req.params.id as string); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Scenarios ──────────────────────────────────────────────────────
+app.get("/library/scenarios", async (_req, res) => {
+  try { res.json((await getLibrary()).scenarios); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/scenarios", async (req, res) => {
+  try { res.json(await createScenario(req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/scenarios/:id", async (req, res) => {
+  try { res.json(await updateScenario(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/scenarios/:id", async (req, res) => {
+  try { await deleteScenario(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.get("/library/scenarios/:id/history", async (req, res) => {
+  try { res.json(await getScenarioHistory(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Run a saved scenario (SSE) ─────────────────────────────────────
+app.post("/library/scenarios/:id/run", async (req, res) => {
+  const scenario = await getScenario(req.params.id);
+  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const onLog = (msg: string) => send({ type: "log", message: msg });
+  const startedAt = Date.now();
+
+  try {
+    const { url, description, authConfig } = scenario;
+    const headed: boolean = req.body?.headed === true;
+    const testTypes: TestType[] = scenario.testTypes?.length ? scenario.testTypes : ["smoke"];
+
+    for (let i = 0; i < testTypes.length; i++) {
+      if (i > 0) send({ type: "separator", testType: testTypes[i] });
+      let lastPassed = true, lastSummary = "", lastReportId: string | undefined;
+      let bufferedResult: object | null = null;
+      const wrappedSend = (data: any) => {
+        if (data.type === "result") {
+          lastPassed = data.passed; lastSummary = data.summary; lastReportId = data.reportId;
+          bufferedResult = data;
+        } else { send(data); }
+      };
+      await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed);
+      await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
+                           passed: lastPassed, summary: lastSummary,
+                           reportId: lastReportId, durationMs: Date.now() - startedAt });
+      if (bufferedResult) send(bufferedResult);
+    }
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+  } finally {
+    res.end();
+  }
+});
+
+// ─── Projects: Members ───────────────────────────────────────────────────────
+app.get("/library/projects/:id/members", async (req, res) => {
+  try { res.json(await getMembers(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/projects/:id/members", async (req, res) => {
+  try { res.json(await createMember({ ...req.body, projectId: req.params.id })); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/members/:id", async (req, res) => {
+  try { res.json(await updateMember(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/members/:id", async (req, res) => {
+  try { await deleteMember(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Projects: Roles ─────────────────────────────────────────────────────────
+app.get("/library/projects/:id/roles", async (req, res) => {
+  try { res.json(await getRoles(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/projects/:id/roles", requireAdmin, async (req, res) => {
+  try { res.json(await createRole({ projectId: req.params.id, ...req.body })); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/roles/:id", requireAdmin, async (req, res) => {
+  try { res.json(await updateRole(req.params.id as string, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/roles/:id", requireAdmin, async (req, res) => {
+  try { await deleteRole(req.params.id as string); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Projects: Dashboard Stats ───────────────────────────────────────────────
+app.get("/library/projects/:id/stats", async (req, res) => {
+  try { res.json(await getDashboardStats(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+// Global stats (all projects)
+app.get("/library/stats", async (_req, res) => {
+  try { res.json(await getDashboardStats()); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Import from Excel/CSV ──────────────────────────────────────────
+app.get("/library/import/template", (_req, res) => {
+  const rows = [
+    ["Module", "Scenario Name", "URL", "Test Types", "Description", "Tags", "Login URL", "Login Email", "Login Password"],
+    ["Authentication", "Login page loads", "https://app.example.com/login", "smoke", "Check login form renders correctly", "auth,critical", "", "", ""],
+    ["Authentication", "Login form submit", "https://app.example.com/login", "smoke,forms", "Fill and submit the login form", "auth", "https://app.example.com/login", "user@example.com", "secret123"],
+    ["Dashboard", "Dashboard navigation", "https://app.example.com/dashboard", "smoke,navigation", "Test main nav links", "regression", "", "", ""],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [20, 30, 40, 25, 40, 25, 35, 25, 20].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, ws, "Scenarios");
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", "attachment; filename=\"scenario-import-template.xlsx\"");
+  res.send(buf);
+});
+
+// ─── Katalon .tc XML helpers ──────────────────────────────────────────────────
+function parseTcXml(content: string): { name: string; description: string; tags: string[] } {
+  const extract = (tag: string) => {
+    const m = content.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+    return m ? m[1].trim() : "";
+  };
+  const tagStr = extract("tag");
+  return {
+    name:        extract("name"),
+    description: extract("description"),
+    tags: tagStr ? tagStr.split(",").map(t => t.trim()).filter(Boolean) : [],
+  };
+}
+function extractGroovyUrl(content: string): string {
+  const m = content.match(/WebUI\.navigateToUrl\(['"](.+?)['"]\)/);
+  return m ? m[1] : "";
+}
+function extractGroovyAuth(content: string): { loginUrl: string; email: string; password: string } | undefined {
+  const urlM    = content.match(/WebUI\.navigateToUrl\(['"](.+?)['"]\)/);
+  const userM   = content.match(/WebUI\.setText\([^,]+,\s*['"](.+?)['"]\)/);
+  if (!urlM || !userM) return undefined;
+  return { loginUrl: urlM[1], email: userM[1], password: "" };
+}
+// ─── DSSB / formal test-script Excel parser ─────────────────────────────────
+interface DssbTestCase {
+  sheetName: string;
+  subModule: string;
+  useCase: string;
+  testCaseId: string;
+  scenarioId: string;
+  flow: string;       // Positif / Negatif
+  summary: string;
+  testSteps: string;
+  expected: string;
+  actor: string;
+}
+
+function isDssbFormat(workbook: XLSX.WorkBook): boolean {
+  // Detect DSSB format: has a "URL" sheet or sheets named "Senario ..."
+  // AND at least one sheet with rows starting with "TC-" in column 1
+  const hasUrlSheet = workbook.SheetNames.some(n => n.toLowerCase() === "url");
+  const hasSenarioSheet = workbook.SheetNames.some(n => /senario/i.test(n));
+  if (!hasUrlSheet && !hasSenarioSheet) return false;
+  for (const name of workbook.SheetNames) {
+    if (/senario/i.test(name) || (!hasUrlSheet && name !== "URL")) {
+      const rows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets[name], { header: 1, defval: "" });
+      for (const row of rows) {
+        if (String(row[1] ?? "").startsWith("TC-")) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parseDssbWorkbook(workbook: XLSX.WorkBook): {
+  projectName: string;
+  scenarioTitle: string;
+  url: string;
+  credentials: { role: string; name: string; userId: string; password: string }[];
+  testCases: DssbTestCase[];
+} {
+  let projectName = "";
+  let scenarioTitle = "";
+  let url = "";
+  const credentials: { role: string; name: string; userId: string; password: string }[] = [];
+
+  // Parse URL sheet for metadata & credentials
+  if (workbook.SheetNames.includes("URL")) {
+    const rows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets["URL"], { header: 1, defval: "" });
+    for (const row of rows) {
+      const c1 = String(row[1] ?? "");
+      if (c1.startsWith("Nama Projek:")) projectName = c1.replace("Nama Projek:", "").trim();
+      if (c1.startsWith("Senario :") || c1.startsWith("Senario:")) scenarioTitle = c1.replace(/^Senario\s*:\s*/, "").trim();
+      if (String(row[0] ?? "").toLowerCase().includes("link")) url = String(row[1] ?? "").trim();
+      // Parse credential blocks (multi-line cells with Nama/Peranan/id pengguna/password)
+      for (const cell of row) {
+        const s = String(cell ?? "");
+        if (s.includes("Peranan") && s.includes("id pengguna")) {
+          const nameM = s.match(/Nama\s*:\s*(.+)/);
+          const roleM = s.match(/Peranan\s*:\s*(.+)/);
+          const userM = s.match(/id pengguna\s*:\s*(.+)/);
+          const passM = s.match(/password\s*:\s*(.+)/i);
+          if (roleM && userM) {
+            credentials.push({
+              role: roleM[1].trim(),
+              name: nameM?.[1]?.trim() ?? "",
+              userId: userM[1].trim(),
+              password: passM?.[1]?.trim() ?? "",
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Parse scenario sheets for test cases
+  const testCases: DssbTestCase[] = [];
+  const scenarioSheets = workbook.SheetNames.filter(n =>
+    n.toLowerCase() !== "url" && n.toLowerCase() !== "nota" && !n.toLowerCase().includes("pengesahan")
+  );
+
+  for (const sheetName of scenarioSheets) {
+    const rows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets[sheetName], { header: 1, defval: "" });
+    let currentSubModule = "";
+    let currentUseCase = "";
+    let currentActor = "";
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const c1 = String(row[1] ?? "").trim();
+      const c2 = String(row[2] ?? "").trim();
+
+      // Sub-module header (starts with "5.1")
+      if (c1.match(/^5\.\d/)) {
+        currentSubModule = c1.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+      }
+      // Use case description
+      if (c1 === "Keterangan Use Case:" || c1.startsWith("Keterangan Use Case:")) {
+        currentUseCase = c2.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+      }
+      // Scenario row with actor (ID Senario row that has actor info)
+      if (c1.startsWith("SR-") && String(row[7] ?? "").trim()) {
+        currentActor = String(row[7] ?? "").trim();
+      }
+      // Test case rows
+      if (c1.startsWith("TC-")) {
+        testCases.push({
+          sheetName,
+          subModule: currentSubModule,
+          useCase: currentUseCase,
+          testCaseId: c1,
+          scenarioId: c2,
+          flow: String(row[3] ?? "").trim(),
+          summary: String(row[4] ?? "").replace(/\r?\n/g, " ").trim(),
+          testSteps: String(row[5] ?? "").trim(),
+          expected: String(row[6] ?? "").trim(),
+          actor: currentActor,
+        });
+      }
+    }
+  }
+
+  if (!projectName) projectName = scenarioTitle || "Imported Project";
+  return { projectName, scenarioTitle, url, credentials, testCases };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post("/library/import", upload.array("files", 100), async (req, res) => {
+  const files = req.files as Express.Multer.File[] | undefined;
+  if (!files?.length) { res.status(400).json({ error: "No file uploaded" }); return; }
+
+  const created: string[] = [];
+  const errors: { row: number; error: string }[] = [];
+  const moduleCache = new Map<string, string>();
+  const VALID_TYPES = new Set(["smoke", "navigation", "forms", "responsive", "accessibility", "quick"]);
+
+  const lib = await getLibrary();
+  for (const m of lib.modules) moduleCache.set(m.name.toLowerCase(), m.id);
+
+  // Helper: resolve or create module by name
+  async function resolveModule(moduleName: string): Promise<string> {
+    const key = moduleName.toLowerCase();
+    if (moduleCache.has(key)) return moduleCache.get(key)!;
+    const freshLib = await getLibrary();
+    let projectId = freshLib.projects[0]?.id;
+    if (!projectId) { const p = await createProject({ name: "Default" }); projectId = p.id; }
+    const mod = await createModule({ projectId, name: moduleName });
+    moduleCache.set(key, mod.id);
+    return mod.id;
+  }
+
+  // ── Separate files by type ──────────────────────────────────────────────
+  const tcFiles     = files.filter(f => f.originalname.toLowerCase().endsWith(".tc"));
+  const groovyFiles = files.filter(f => f.originalname.toLowerCase().endsWith(".groovy"));
+  const xlsxFiles   = files.filter(f => /\.(xlsx?|csv)$/i.test(f.originalname));
+
+  // Build groovy lookup: base-name (no ext, lower) → content
+  const groovyMap = new Map<string, string>();
+  for (const g of groovyFiles) {
+    const base = g.originalname.replace(/\.groovy$/i, "").toLowerCase();
+    groovyMap.set(base, g.buffer.toString("utf-8"));
+  }
+
+  // ── Process Katalon .tc files ───────────────────────────────────────────
+  for (let i = 0; i < tcFiles.length; i++) {
+    const file = tcFiles[i];
+    try {
+      const content = file.buffer.toString("utf-8");
+      const parsed  = parseTcXml(content);
+      if (!parsed.name) { errors.push({ row: i + 1, error: `${file.originalname}: could not parse <name>` }); continue; }
+
+      // Try to find companion .groovy — by name match first, then any uploaded groovy
+      const base         = file.originalname.replace(/\.tc$/i, "").toLowerCase();
+      const parsedName   = parsed.name.toLowerCase();
+      const groovy       = groovyMap.get(base)
+                        ?? groovyMap.get(parsedName)
+                        ?? (groovyFiles.length === 1 ? groovyFiles[0].buffer.toString("utf-8") : "")
+                        ?? [...groovyMap.values()].find(g => extractGroovyUrl(g)) ?? "";
+      const url          = extractGroovyUrl(groovy) || (req.body?.defaultUrl as string) || "";
+      const auth         = groovy ? extractGroovyAuth(groovy) : undefined;
+
+      // Infer module from original folder path if available (multipart fieldname), else use "Katalon Import"
+      const moduleName = (req.body?.module as string) || "Katalon Import";
+      const moduleId   = await resolveModule(moduleName);
+
+      await createScenario({
+        moduleId, name: parsed.name, url,
+        testTypes: ["smoke"] as TestType[],
+        description: parsed.description || `Imported from Katalon: ${file.originalname}`,
+        tags: [...parsed.tags, "katalon"],
+        authConfig: auth,
+      });
+      created.push(parsed.name);
+    } catch (err) {
+      errors.push({ row: i + 1, error: `${file.originalname}: ${(err as Error).message}` });
+    }
+  }
+
+  // ── Process Excel / CSV files ───────────────────────────────────────────
+  for (const xlsxFile of xlsxFiles) {
+    try {
+      const workbook = XLSX.read(xlsxFile.buffer, { type: "buffer" });
+
+      // ── DSSB formal test-script format ───────────────────────────────
+      if (isDssbFormat(workbook)) {
+        const dssb = parseDssbWorkbook(workbook);
+
+        // Resolve or create project
+        const targetProjectId = req.body?.projectId as string | undefined;
+        let projectId: string;
+        if (targetProjectId) {
+          projectId = targetProjectId;
+        } else {
+          const freshLib = await getLibrary();
+          const existing = freshLib.projects.find(p => p.name.toLowerCase() === dssb.projectName.toLowerCase());
+          if (existing) {
+            projectId = existing.id;
+          } else {
+            const p = await createProject({ name: dssb.projectName, description: dssb.scenarioTitle });
+            projectId = p.id;
+          }
+        }
+
+        // Group test cases by sheet (each sheet = a module)
+        const sheetGroups = new Map<string, DssbTestCase[]>();
+        for (const tc of dssb.testCases) {
+          const arr = sheetGroups.get(tc.sheetName) ?? [];
+          arr.push(tc);
+          sheetGroups.set(tc.sheetName, arr);
+        }
+
+        for (const [sheetName, tcs] of sheetGroups) {
+          // Create module for each sheet
+          const moduleName = sheetName;
+          const key = `${projectId}:${moduleName.toLowerCase()}`;
+          let moduleId: string;
+          if (moduleCache.has(key)) {
+            moduleId = moduleCache.get(key)!;
+          } else {
+            const mod = await createModule({ projectId, name: moduleName });
+            moduleId = mod.id;
+            moduleCache.set(key, moduleId);
+          }
+
+          for (const tc of tcs) {
+            try {
+              // Build rich description from test steps + expected results
+              const descParts: string[] = [];
+              if (tc.summary) descParts.push(tc.summary);
+              if (tc.testSteps) descParts.push(`\n**Langkah Ujian:**\n${tc.testSteps}`);
+              if (tc.expected) descParts.push(`\n**Jangkaan Hasil:**\n${tc.expected}`);
+              if (tc.useCase) descParts.push(`\n**Use Case:** ${tc.useCase}`);
+
+              // Determine test type from flow
+              const testTypes: TestType[] = tc.flow === "Negatif" ? ["forms"] : ["smoke"];
+
+              // Build tags
+              const tags: string[] = ["dssb", tc.flow.toLowerCase()];
+              if (tc.actor) tags.push(tc.actor.toLowerCase().replace(/\s+/g, "-"));
+              if (tc.scenarioId) tags.push(tc.scenarioId);
+
+              // Try to match credentials by actor
+              let authConfig: { loginUrl: string; email: string; password: string } | undefined;
+              if (dssb.url && dssb.credentials.length) {
+                const cred = dssb.credentials.find(c =>
+                  tc.actor && c.role.toLowerCase().includes(tc.actor.toLowerCase().split(" ")[0])
+                ) ?? dssb.credentials[0];
+                if (cred?.password) {
+                  authConfig = { loginUrl: dssb.url, email: cred.userId, password: cred.password };
+                }
+              }
+
+              await createScenario({
+                moduleId,
+                testCaseId: tc.testCaseId || undefined,
+                scenarioRefId: tc.scenarioId || undefined,
+                name: tc.summary || tc.testCaseId,
+                url: dssb.url || "https://example.com",
+                testTypes,
+                description: descParts.join("\n") || undefined,
+                tags,
+                authConfig,
+              });
+              created.push(tc.testCaseId);
+            } catch (err) {
+              errors.push({ row: 0, error: `${tc.testCaseId}: ${(err as Error).message}` });
+            }
+          }
+        }
+        continue; // Skip standard Excel processing for this file
+      }
+
+      // ── Standard flat Excel/CSV format ─────────────────────────────────
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(
+        workbook.Sheets[workbook.SheetNames[0]], { defval: "" }
+      );
+      const norm   = (k: string) => String(k).toLowerCase().trim().replace(/[\s_\-]+/g, " ");
+      const getCol = (row: Record<string, string>, ...keys: string[]) => {
+        for (const [k, v] of Object.entries(row)) {
+          if (keys.includes(norm(k))) return String(v ?? "").trim();
+        }
+        return "";
+      };
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNum = i + 2;
+        const moduleName = getCol(row, "module");
+        const name       = getCol(row, "scenario name", "scenario", "name");
+        const url        = getCol(row, "url");
+        if (!moduleName || !name || !url) {
+          errors.push({ row: rowNum, error: `Missing: ${[!moduleName && "Module", !name && "Scenario Name", !url && "URL"].filter(Boolean).join(", ")}` });
+          continue;
+        }
+        const moduleId = await resolveModule(moduleName);
+        const rawTypes = getCol(row, "test types", "test type", "type", "types");
+        const testTypes = (rawTypes || "smoke").split(",").map(t => t.trim().toLowerCase())
+          .filter(t => VALID_TYPES.has(t)) as TestType[];
+        if (!testTypes.length) { errors.push({ row: rowNum, error: `Invalid test types: "${rawTypes}"` }); continue; }
+        const loginUrl = getCol(row, "login url", "loginurl");
+        const loginEmail = getCol(row, "login email", "email");
+        const loginPassword = getCol(row, "login password", "password");
+        const authConfig = (loginUrl && loginEmail && loginPassword) ? { loginUrl, email: loginEmail, password: loginPassword } : undefined;
+        try {
+          await createScenario({
+            moduleId, name, url, testTypes,
+            description: getCol(row, "description", "desc") || undefined,
+            tags: (getCol(row, "tags", "tag") || "").split(",").map(t => t.trim()).filter(Boolean),
+            authConfig,
+          });
+          created.push(name);
+        } catch (err) {
+          errors.push({ row: rowNum, error: (err as Error).message });
+        }
+      }
+    } catch (err) {
+      errors.push({ row: 0, error: `${xlsxFile.originalname}: ${(err as Error).message}` });
+    }
+  }
+
+  res.json({ created: created.length, createdNames: created, errors });
+});
+
+// ─── React SPA catch-all (must be last) ──────────────────────────────────────
+app.get("/{*path}", (req, res, next) => {
+  // Only serve index.html for non-API, non-file requests
+  if (req.path.startsWith("/api") || req.path.includes(".")) return next();
+  const indexPath = path.join(clientDist, "index.html");
+  fs.access(indexPath)
+    .then(() => res.sendFile(indexPath))
+    .catch(() => next());
+});
+
+const PORT = Number(process.env.PORT ?? 4000);
+seedAdminIfNeeded(prisma).then(() => {
+  app.listen(PORT, () => console.log(`TestAgent API → http://localhost:${PORT}`));
+});

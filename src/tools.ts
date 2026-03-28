@@ -1,3 +1,5 @@
+import path from "path";
+import fs from "fs/promises";
 import { Page } from "playwright";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -98,16 +100,204 @@ export const toolDefinitions: Anthropic.Tool[] = [
       required: ["text"],
     },
   },
+  {
+    name: "hover",
+    description: "Hover over an element by CSS selector",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector for the element to hover over",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "scroll_to",
+    description:
+      "Scroll to an element or to the bottom of the page if no selector is provided",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description:
+            "CSS selector of the element to scroll into view. Omit to scroll to the bottom of the page.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "double_click",
+    description: "Double-click on an element by CSS selector",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector for the element to double-click",
+        },
+      },
+      required: ["selector"],
+    },
+  },
+  {
+    name: "select_option",
+    description: "Select an option from a <select> element",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector for the <select> element",
+        },
+        value: {
+          type: "string",
+          description: "The value to select",
+        },
+      },
+      required: ["selector", "value"],
+    },
+  },
+  {
+    name: "keyboard_press",
+    description: "Press a keyboard key (e.g. Enter, Tab, Escape)",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        key: {
+          type: "string",
+          description:
+            "Key to press (e.g. 'Enter', 'Tab', 'Escape', 'ArrowDown')",
+        },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "screenshot",
+    description: "Take a screenshot of the current page and save it as a PNG",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Optional name for the screenshot file (default: 'screenshot')",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_attribute",
+    description: "Get the value of an attribute on a DOM element",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        selector: {
+          type: "string",
+          description: "CSS selector for the element",
+        },
+        attribute: {
+          type: "string",
+          description: "Attribute name to retrieve (e.g. 'href', 'value')",
+        },
+      },
+      required: ["selector", "attribute"],
+    },
+  },
+  {
+    name: "execute_js",
+    description: "Execute arbitrary JavaScript in the browser page context",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        script: {
+          type: "string",
+          description: "JavaScript expression or statement(s) to evaluate",
+        },
+      },
+      required: ["script"],
+    },
+  },
+  {
+    name: "wait_for_navigation",
+    description: "Wait for the page network to become idle",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        timeout: {
+          type: "number",
+          description: "Max wait time in milliseconds (default: 10000)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "set_viewport",
+    description: "Set the browser viewport size",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        width: { type: "number", description: "Viewport width in pixels" },
+        height: { type: "number", description: "Viewport height in pixels" },
+      },
+      required: ["width", "height"],
+    },
+  },
+  {
+    name: "check_accessibility",
+    description:
+      "Run axe-core accessibility checks on the current page and return violations",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "fill_form",
+    description: "Fill multiple form fields in a single call",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        fields: {
+          type: "array",
+          description: "Array of {selector, value} pairs to fill",
+          items: {
+            type: "object",
+            properties: {
+              selector: { type: "string" },
+              value: { type: "string" },
+            },
+            required: ["selector", "value"],
+          },
+        },
+      },
+      required: ["fields"],
+    },
+  },
 ];
 
 // ─── Tool Handlers (execute against Playwright) ───────────────────────────────
 
-export type ToolResult = { success: boolean; output: string };
+export type ToolResult = {
+  success: boolean;
+  output: string;
+  screenshotPath?: string;
+  screenshotBase64?: string;
+};
 
 export async function executeTool(
   page: Page,
   toolName: string,
-  toolInput: Record<string, unknown>
+  toolInput: Record<string, unknown>,
+  context?: { reportId?: string; screenshotIndex?: number }
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
@@ -188,6 +378,131 @@ export async function executeTool(
           };
         }
         return { success: true, output: `PASS: Text "${text}" is visible` };
+      }
+
+      case "hover": {
+        const selector = toolInput.selector as string;
+        await page.hover(selector);
+        await page.waitForLoadState("domcontentloaded");
+        return { success: true, output: `Hovered over "${selector}"` };
+      }
+
+      case "scroll_to": {
+        const selector = toolInput.selector as string | undefined;
+        if (selector) {
+          await page.locator(selector).scrollIntoViewIfNeeded();
+          return { success: true, output: `Scrolled "${selector}" into view` };
+        } else {
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          return { success: true, output: "Scrolled to bottom of page" };
+        }
+      }
+
+      case "double_click": {
+        const selector = toolInput.selector as string;
+        await page.dblclick(selector);
+        await page.waitForLoadState("domcontentloaded");
+        return { success: true, output: `Double-clicked on "${selector}"` };
+      }
+
+      case "select_option": {
+        const selector = toolInput.selector as string;
+        const value = toolInput.value as string;
+        const selected = await page.selectOption(selector, value);
+        return {
+          success: true,
+          output: `Selected "${selected.join(", ")}" in "${selector}"`,
+        };
+      }
+
+      case "keyboard_press": {
+        const key = toolInput.key as string;
+        await page.keyboard.press(key);
+        return { success: true, output: `Pressed key "${key}"` };
+      }
+
+      case "screenshot": {
+        const name = (toolInput.name as string) ?? "screenshot";
+        const reportId = context?.reportId ?? "manual";
+        const idx = context?.screenshotIndex ?? 0;
+        const screenshotsDir = path.join(process.cwd(), "reports", "screenshots");
+        await fs.mkdir(screenshotsDir, { recursive: true });
+        const filename = `${reportId}-${idx}-${name.replace(/[^a-z0-9]/gi, "_")}.png`;
+        const screenshotPath = path.join(screenshotsDir, filename);
+        const buffer = await page.screenshot({ path: screenshotPath, type: "png" });
+        const screenshotBase64 = buffer.toString("base64");
+        return {
+          success: true,
+          output: `Screenshot saved: ${filename}`,
+          screenshotPath,
+          screenshotBase64,
+        };
+      }
+
+      case "get_attribute": {
+        const selector = toolInput.selector as string;
+        const attribute = toolInput.attribute as string;
+        const value = await page.getAttribute(selector, attribute);
+        return {
+          success: true,
+          output: value !== null ? value : "null",
+        };
+      }
+
+      case "execute_js": {
+        const script = toolInput.script as string;
+        const result = await page.evaluate((s) => {
+          // eslint-disable-next-line no-eval
+          return eval(s);
+        }, script);
+        const output = JSON.stringify(result, null, 2);
+        return { success: true, output: output.slice(0, 2000) };
+      }
+
+      case "wait_for_navigation": {
+        const timeout = (toolInput.timeout as number) ?? 10000;
+        await page.waitForLoadState("networkidle", { timeout });
+        return { success: true, output: "Page reached network idle state" };
+      }
+
+      case "set_viewport": {
+        const width = toolInput.width as number;
+        const height = toolInput.height as number;
+        await page.setViewportSize({ width, height });
+        return {
+          success: true,
+          output: `Viewport set to ${width}x${height}`,
+        };
+      }
+
+      case "check_accessibility": {
+        await page.addScriptTag({
+          url: "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.9.1/axe.min.js",
+        });
+        const violations = await page.evaluate(async () => {
+          const results = await (window as any).axe.run();
+          return results.violations.slice(0, 20).map((v: any) => ({
+            id: v.id,
+            impact: v.impact,
+            description: v.description,
+            nodes: v.nodes.length,
+          }));
+        });
+        const output =
+          violations.length === 0
+            ? "No accessibility violations found"
+            : JSON.stringify(violations, null, 2);
+        return { success: violations.length === 0, output };
+      }
+
+      case "fill_form": {
+        const fields = toolInput.fields as Array<{ selector: string; value: string }>;
+        const results: string[] = [];
+        for (const field of fields) {
+          await page.fill(field.selector, field.value);
+          results.push(`Filled "${field.selector}" with "${field.value}"`);
+        }
+        return { success: true, output: results.join("\n") };
       }
 
       default:

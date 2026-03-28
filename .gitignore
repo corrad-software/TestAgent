@@ -3,3 +3,22 @@ dist/
 .env
 *.env.local
 screenshots/
+.auth/
+generated-tests/
+playwright-reports/
+test-results/
+scenarios/
+
+/generated/prisma
+
+# Database
+data/
+*.db
+*.db-journal
+
+# React build
+client/dist/
+client/node_modules/
+
+# Prisma
+generated/

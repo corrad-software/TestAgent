@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TestAgent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: { brand: { DEFAULT: '#6366f1', hover: '#4f46e5' } } } }
+    }
+  </script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .line-tool   { color: #60a5fa; }
+    .line-claude { color: #a78bfa; }
+    .line-pass   { color: #4ade80; }
+    .line-fail   { color: #f87171; }
+    .line-error  { color: #f87171; }
+    .line-info   { color: #e2e8f0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+    select option { background: #1a1f2e; }
+    details summary::-webkit-details-marker { display: none; }
+    .tree-item { transition: background 0.1s; }
+    .tree-item.active { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    /* Sidebar collapse transition */
+    #sidebar { transition: width 0.2s ease; }
+    #main-content { transition: margin-left 0.2s ease; }
+    .sidebar-label { transition: opacity 0.15s ease, width 0.2s ease; overflow: hidden; white-space: nowrap; }
+    #sidebar.collapsed .sidebar-label { opacity: 0; width: 0; }
+    #sidebar.collapsed .sidebar-section { display: none; }
+    #sidebar.collapsed nav a { justify-content: center; padding-left: 0; padding-right: 0; }
+    #sidebar.collapsed #sidebar-logo-text { display: none; }
+    #sidebar.collapsed #sidebar-footer { display: none; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen">
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="fixed inset-y-0 left-0 w-64 bg-gray-900 border-r border-gray-800 flex flex-col z-20">
+    <!-- Logo + collapse toggle -->
+    <div class="flex items-center gap-3 px-4 py-5 border-b border-gray-800">
+      <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center flex-shrink-0">
+        <i data-lucide="bot" class="w-4 h-4 text-white"></i>
+      </div>
+      <span id="sidebar-logo-text" class="sidebar-label font-bold text-white text-sm tracking-wide flex-1">TestAgent</span>
+      <button id="sidebar-toggle" class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-800 text-gray-500 hover:text-gray-200 transition flex-shrink-0" title="Collapse sidebar">
+        <i data-lucide="panel-left-close" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <!-- Nav -->
+    <nav class="px-3 py-4 space-y-1">
+      <a href="#" id="nav-run"
+        class="nav-tab flex items-center gap-3 px-3 py-2 rounded-lg bg-brand/10 text-brand text-sm font-medium" title="Run Test">
+        <i data-lucide="flask-conical" class="w-4 h-4 flex-shrink-0"></i>
+        <span class="sidebar-label">Run Test</span>
+      </a>
+      <a href="#" id="nav-library"
+        class="nav-tab flex items-center gap-3 px-3 py-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 text-sm font-medium transition" title="Scenario Library">
+        <i data-lucide="library" class="w-4 h-4 flex-shrink-0"></i>
+        <span class="sidebar-label">Scenario Library</span>
+      </a>
+    </nav>
+
+    <!-- Recent Reports (only shown in run view) -->
+    <div id="sidebar-reports" class="sidebar-section flex-1 flex flex-col min-h-0 border-t border-gray-800">
+      <div class="flex items-center gap-2 px-5 py-3">
+        <i data-lucide="history" class="w-3.5 h-3.5 text-gray-500"></i>
+        <span class="text-xs font-semibold text-gray-500 uppercase tracking-widest">Recent Runs</span>
+      </div>
+      <div id="reports-list" class="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+        <p class="px-3 text-xs text-gray-700 italic">No runs yet</p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div id="sidebar-footer" class="px-5 py-4 border-t border-gray-800">
+      <p class="text-xs text-gray-600">Powered by Claude + Playwright</p>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div id="main-content" class="ml-64 min-h-screen flex flex-col">
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- VIEW: Run Test                                                          -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="view-run">
+
+      <!-- Topbar -->
+      <header class="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-8 py-4 flex items-center justify-between">
+        <div>
+          <h1 class="text-base font-semibold text-white">Run Test</h1>
+          <p class="text-xs text-gray-500 mt-0.5">Select a test type, enter a URL, and let the agent do the work</p>
+        </div>
+        <div id="status-badge" class="hidden items-center gap-2 text-xs font-medium bg-brand/10 text-brand px-3 py-1.5 rounded-full">
+          <span class="w-1.5 h-1.5 rounded-full bg-brand pulse-dot"></span>
+          <span id="status-text">Running…</span>
+        </div>
+      </header>
+
+      <!-- Content -->
+      <main class="flex-1 px-8 py-6 space-y-5 max-w-4xl w-full">
+
+        <!-- Preset Scenarios -->
+        <div class="space-y-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-widest px-1">Start with a preset</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2" id="preset-grid">
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="smoke"
+              data-desc="Check that the page loads correctly, the title is visible, main content appears, and there are no obvious errors.">
+              <div class="text-lg mb-1">🔑</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">Login Page</div>
+              <div class="text-xs text-gray-500 mt-0.5">Test sign-in form & redirect</div>
+            </button>
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="forms"
+              data-desc="Test the login form. Fill the email field with test@example.com and the password field with TestPass123!. Check that the submit button is enabled and form validation works on empty submission.">
+              <div class="text-lg mb-1">🛒</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">E-commerce</div>
+              <div class="text-xs text-gray-500 mt-0.5">Product page & add to cart</div>
+            </button>
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="forms"
+              data-desc="Test the contact form. Fill in the name, email, and message fields with test data. Check that form validation prevents empty submission and that the submit button is visible and enabled.">
+              <div class="text-lg mb-1">📬</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">Contact Form</div>
+              <div class="text-xs text-gray-500 mt-0.5">Fill, validate & submit</div>
+            </button>
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="navigation"
+              data-desc="Check that the blog loads, the article title and content are visible, images have alt text, and navigation links to other posts work correctly.">
+              <div class="text-lg mb-1">📝</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">Blog / Article</div>
+              <div class="text-xs text-gray-500 mt-0.5">Content, images & links</div>
+            </button>
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="smoke"
+              data-desc="Test the landing page. Check the hero section and headline are visible, the main call-to-action button exists and is clickable, and the page looks correct.">
+              <div class="text-lg mb-1">🚀</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">Landing Page</div>
+              <div class="text-xs text-gray-500 mt-0.5">Hero, CTA & navigation</div>
+            </button>
+
+            <button class="preset-card text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-brand/50 rounded-xl px-4 py-3 transition group"
+              data-type="accessibility"
+              data-desc="Check this page for accessibility issues: verify all images have alt text, form inputs have labels, there is a main heading, and landmark regions like nav and main are present.">
+              <div class="text-lg mb-1">♿</div>
+              <div class="text-sm font-semibold text-gray-200 group-hover:text-white">Accessibility</div>
+              <div class="text-xs text-gray-500 mt-0.5">WCAG basics check</div>
+            </button>
+
+          </div>
+        </div>
+
+        <!-- Input card -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
+
+          <!-- URL -->
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Target URL</label>
+            <div class="relative">
+              <i data-lucide="globe" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none"></i>
+              <input id="url-input" type="url" placeholder="https://example.com"
+                class="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand focus:ring-1 focus:ring-brand/40 transition" />
+            </div>
+          </div>
+
+          <!-- Test Type checkboxes -->
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Test Type <span class="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span></label>
+            <div id="run-type-pills" class="flex flex-wrap gap-2">
+              <label class="type-pill cursor-pointer" data-value="smoke">
+                <input type="checkbox" value="smoke" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">🔍 Smoke</span>
+              </label>
+              <label class="type-pill cursor-pointer" data-value="navigation">
+                <input type="checkbox" value="navigation" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">🔗 Navigation</span>
+              </label>
+              <label class="type-pill cursor-pointer" data-value="forms">
+                <input type="checkbox" value="forms" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">📝 Forms</span>
+              </label>
+              <label class="type-pill cursor-pointer" data-value="responsive">
+                <input type="checkbox" value="responsive" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">📱 Responsive</span>
+              </label>
+              <label class="type-pill cursor-pointer" data-value="accessibility">
+                <input type="checkbox" value="accessibility" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">♿ Accessibility</span>
+              </label>
+              <label class="type-pill cursor-pointer" data-value="quick">
+                <input type="checkbox" value="quick" class="sr-only" />
+                <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">⚡ Quick (no AI)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Suite description hint -->
+          <p id="suite-hint" class="text-xs text-gray-500 -mt-2"></p>
+
+          <!-- Description -->
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
+              Additional instructions
+              <span class="ml-1 text-gray-600 normal-case font-normal tracking-normal">— optional</span>
+            </label>
+            <textarea id="desc-input" rows="2" placeholder="e.g. Focus on the login form, check that the sign-up link works…"
+              class="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand focus:ring-1 focus:ring-brand/40 transition resize-none"></textarea>
+          </div>
+
+          <!-- Login Required (collapsible) -->
+          <details id="auth-details" class="group border-t border-gray-800 pt-4">
+            <summary class="flex items-center gap-2 cursor-pointer select-none list-none text-xs font-semibold text-gray-500 uppercase tracking-widest w-fit hover:text-gray-300 transition">
+              <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+              Login Required
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 group-open:rotate-180 transition-transform ml-1"></i>
+            </summary>
+            <div class="mt-4 space-y-3">
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Login URL</label>
+                  <div class="relative">
+                    <i data-lucide="log-in" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none"></i>
+                    <input id="login-url" type="url" placeholder="https://app.com/login"
+                      class="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand focus:ring-1 focus:ring-brand/40 transition" />
+                  </div>
+                </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Email / Username</label>
+                  <div class="relative">
+                    <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none"></i>
+                    <input id="login-email" type="text" placeholder="you@example.com"
+                      class="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand focus:ring-1 focus:ring-brand/40 transition" />
+                  </div>
+                </div>
+                <div class="space-y-1.5">
+                  <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Password</label>
+                  <div class="relative">
+                    <i data-lucide="key-round" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none"></i>
+                    <input id="login-password" type="password" placeholder="••••••••"
+                      class="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand focus:ring-1 focus:ring-brand/40 transition" />
+                  </div>
+                </div>
+              </div>
+              <p class="text-xs text-gray-600 flex items-center gap-1.5">
+                <i data-lucide="shield" class="w-3 h-3"></i>
+                Credentials are only used during the test run and are never stored or sent to Claude.
+              </p>
+            </div>
+          </details>
+
+          <!-- Actions -->
+          <div class="flex items-center gap-3 flex-wrap">
+            <button id="run-btn"
+              class="flex items-center gap-2 bg-brand hover:bg-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
+              <i data-lucide="play" class="w-4 h-4" id="run-icon"></i>
+              <span id="run-label">Run Test</span>
+            </button>
+            <button id="headed-toggle"
+              class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 text-sm font-medium px-4 py-2.5 rounded-lg transition"
+              title="Toggle visible browser window">
+              <i data-lucide="monitor" class="w-4 h-4"></i>
+              <span id="headed-label">Headless</span>
+            </button>
+            <button id="clear-btn"
+              class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium px-4 py-2.5 rounded-lg transition">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+              Clear
+            </button>
+            <!-- View Report button (hidden until test completes) -->
+            <a id="report-link" href="#" target="_blank" class="hidden items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm font-medium px-4 py-2.5 rounded-lg transition">
+              <i data-lucide="file-text" class="w-4 h-4"></i>
+              View Full Report
+            </a>
+          </div>
+        </div>
+
+        <!-- Result banner -->
+        <div id="result-banner" class="hidden rounded-xl border px-5 py-4">
+          <div class="flex items-start gap-3">
+            <i id="result-icon" class="w-5 h-5 mt-0.5 flex-shrink-0"></i>
+            <div class="flex-1">
+              <p id="result-label" class="font-semibold text-sm"></p>
+              <p id="result-summary" class="text-sm mt-1 text-gray-300"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Plain-English Explanation (shown on failure) -->
+        <div id="explanation-card" class="hidden bg-amber-950/30 border border-amber-800/50 rounded-xl p-5 space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-base">💡</span>
+            <p class="text-sm font-semibold text-amber-300">What went wrong?</p>
+          </div>
+          <p id="explanation-text" class="text-sm text-amber-100/80 leading-relaxed"></p>
+        </div>
+
+        <!-- Step breakdown (collapsible) -->
+        <details id="steps-panel" class="hidden bg-gray-900 border border-gray-800 rounded-xl overflow-hidden group">
+          <summary class="flex items-center gap-2 px-5 py-3 cursor-pointer text-sm font-medium text-gray-300 hover:bg-gray-800 transition list-none">
+            <i data-lucide="list-checks" class="w-4 h-4 text-gray-500"></i>
+            Step-by-Step Breakdown
+            <span id="steps-count" class="ml-auto text-xs text-gray-600"></span>
+            <i data-lucide="chevron-down" class="w-4 h-4 text-gray-600 group-open:rotate-180 transition-transform"></i>
+          </summary>
+          <div class="border-t border-gray-800 overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="text-gray-600 text-left border-b border-gray-800">
+                  <th class="px-4 py-2 font-medium">#</th>
+                  <th class="px-4 py-2 font-medium">Status</th>
+                  <th class="px-4 py-2 font-medium">Step</th>
+                </tr>
+              </thead>
+              <tbody id="steps-tbody" class="divide-y divide-gray-800/50"></tbody>
+            </table>
+          </div>
+        </details>
+
+        <!-- Console -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
+            <div class="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-widest">
+              <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+              Live Output
+            </div>
+            <div class="flex gap-1.5">
+              <span class="w-3 h-3 rounded-full bg-red-500/40"></span>
+              <span class="w-3 h-3 rounded-full bg-yellow-500/40"></span>
+              <span class="w-3 h-3 rounded-full bg-green-500/40"></span>
+            </div>
+          </div>
+          <div id="console"
+            class="font-mono text-xs leading-relaxed p-5 h-80 overflow-y-auto bg-gray-950 whitespace-pre-wrap break-words">
+            <span class="text-gray-600 italic">Output will appear here when a test runs…</span>
+          </div>
+        </div>
+
+      </main>
+    </div><!-- /view-run -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- VIEW: Scenario Library                                                  -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="view-library" class="hidden flex flex-col h-screen">
+
+      <!-- Topbar -->
+      <header class="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-8 py-4 flex items-center justify-between flex-shrink-0">
+        <div>
+          <h1 class="text-base font-semibold text-white">Scenario Library</h1>
+          <p class="text-xs text-gray-500 mt-0.5">Organise test scenarios by module — re-run any time</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <a href="/library/import/template" download
+            class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium px-3 py-2 rounded-lg transition" title="Download Excel template">
+            <i data-lucide="download" class="w-4 h-4"></i>
+            <span class="hidden sm:inline">Template</span>
+          </a>
+          <button id="lib-import-btn"
+            class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium px-3 py-2 rounded-lg transition">
+            <i data-lucide="upload" class="w-4 h-4"></i>
+            <span class="hidden sm:inline">Import Excel</span>
+          </button>
+          <input id="lib-import-file" type="file" accept=".xlsx,.xls,.csv" class="hidden" />
+          <button id="lib-new-scenario-btn"
+            class="flex items-center gap-2 bg-brand hover:bg-indigo-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            New Scenario
+          </button>
+        </div>
+      </header>
+
+      <!-- Two-panel body -->
+      <div class="flex flex-1 min-h-0">
+
+        <!-- Left: Module list -->
+        <div class="w-56 flex-shrink-0 border-r border-gray-800 bg-gray-900 flex flex-col">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-widest">Modules</span>
+            <button id="lib-new-module-btn" title="New module"
+              class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+
+          <!-- Inline new-module input (hidden) -->
+          <div id="new-module-form-inline" class="hidden px-3 py-2 border-b border-gray-800">
+            <input id="new-module-name-inline" type="text" placeholder="Module name…"
+              class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-brand" />
+            <div class="flex gap-1 mt-1.5">
+              <button id="new-module-save-inline" class="flex-1 text-xs bg-brand hover:bg-indigo-500 text-white rounded px-2 py-1 transition">Save</button>
+              <button id="new-module-cancel-inline" class="flex-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded px-2 py-1 transition">Cancel</button>
+            </div>
+          </div>
+
+          <div id="project-tree" class="flex-1 overflow-y-auto py-2 text-sm">
+            <p class="px-4 py-2 text-xs text-gray-700 italic">No modules yet</p>
+          </div>
+        </div>
+
+        <!-- Right: Scenario cards -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <div class="flex items-center justify-between px-6 py-3 border-b border-gray-800">
+            <div id="lib-breadcrumb" class="text-sm text-gray-400">
+              <span class="text-gray-600 italic">Select a module to view scenarios</span>
+            </div>
+          </div>
+
+          <div id="scenario-cards" class="flex-1 overflow-y-auto p-6">
+            <div id="scenario-empty" class="flex flex-col items-center justify-center h-full text-center">
+              <i data-lucide="folder-open" class="w-12 h-12 text-gray-700 mb-3"></i>
+              <p class="text-sm text-gray-500">Select a module from the list</p>
+              <p class="text-xs text-gray-700 mt-1">or create a module to get started</p>
+            </div>
+            <div id="scenario-grid" class="hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /view-library -->
+
+  </div><!-- /main -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- Scenario Editor Modal                                                   -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="scenario-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+
+      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+        <h2 id="modal-title" class="text-sm font-semibold text-white">New Scenario</h2>
+        <button id="modal-close" class="text-gray-500 hover:text-gray-200 transition">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+
+        <!-- Module selector -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Module</label>
+          <select id="modal-module"
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-brand transition">
+            <option value="">— select module —</option>
+          </select>
+          <p class="text-xs text-gray-600">Can't find your module? <a href="#" onclick="closeModal();showView('library')" class="text-brand hover:underline">Create one in the Library</a>.</p>
+        </div>
+
+        <!-- Name -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Scenario Name</label>
+          <input id="modal-name" type="text" placeholder="e.g. Login page smoke test"
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+        </div>
+
+        <!-- URL -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">URL</label>
+          <input id="modal-url" type="url" placeholder="https://example.com"
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+        </div>
+
+        <!-- Test Types checkboxes -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Test Types <span class="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span></label>
+          <div id="modal-type-pills" class="flex flex-wrap gap-2">
+            <label class="type-pill cursor-pointer" data-value="smoke">
+              <input type="checkbox" value="smoke" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">🔍 Smoke</span>
+            </label>
+            <label class="type-pill cursor-pointer" data-value="navigation">
+              <input type="checkbox" value="navigation" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">🔗 Navigation</span>
+            </label>
+            <label class="type-pill cursor-pointer" data-value="forms">
+              <input type="checkbox" value="forms" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">📝 Forms</span>
+            </label>
+            <label class="type-pill cursor-pointer" data-value="responsive">
+              <input type="checkbox" value="responsive" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">📱 Responsive</span>
+            </label>
+            <label class="type-pill cursor-pointer" data-value="accessibility">
+              <input type="checkbox" value="accessibility" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">♿ Accessibility</span>
+            </label>
+            <label class="type-pill cursor-pointer" data-value="quick">
+              <input type="checkbox" value="quick" class="sr-only" />
+              <span class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-950 text-xs font-medium text-gray-400 hover:border-brand/60 transition select-none">⚡ Quick</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
+            Description <span class="text-gray-600 font-normal normal-case tracking-normal">— optional</span>
+          </label>
+          <textarea id="modal-description" rows="2" placeholder="What should the test focus on?"
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition resize-none"></textarea>
+        </div>
+
+        <!-- Tags -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
+            Tags <span class="text-gray-600 font-normal normal-case tracking-normal">— comma separated</span>
+          </label>
+          <input id="modal-tags" type="text" placeholder="auth, critical, regression"
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+        </div>
+
+        <!-- Auth (collapsible) -->
+        <details class="group border-t border-gray-800 pt-3">
+          <summary class="flex items-center gap-2 cursor-pointer select-none list-none text-xs font-semibold text-gray-500 uppercase tracking-widest hover:text-gray-300 transition w-fit">
+            <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+            Login Required
+            <i data-lucide="chevron-down" class="w-3.5 h-3.5 group-open:rotate-180 transition-transform ml-1"></i>
+          </summary>
+          <div class="mt-3 space-y-2">
+            <input id="modal-auth-login-url" type="url" placeholder="Login URL"
+              class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+            <div class="grid grid-cols-2 gap-2">
+              <input id="modal-auth-email" type="text" placeholder="Email / Username"
+                class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+              <input id="modal-auth-password" type="password" placeholder="Password"
+                class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-brand transition" />
+            </div>
+            <p class="text-xs text-gray-600 flex items-center gap-1">
+              <i data-lucide="shield" class="w-3 h-3"></i>
+              Credentials are stored locally and never sent to Claude.
+            </p>
+          </div>
+        </details>
+
+      </div>
+
+      <div class="px-6 py-4 border-t border-gray-800 flex gap-3 flex-shrink-0">
+        <button id="modal-save" class="flex-1 bg-brand hover:bg-indigo-500 text-white text-sm font-semibold py-2 rounded-lg transition">Save Scenario</button>
+        <button id="modal-cancel" class="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium py-2 rounded-lg transition">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- Import Result Modal                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="import-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <i data-lucide="file-spreadsheet" class="w-4 h-4 text-green-400"></i>
+          <h2 class="text-sm font-semibold text-white">Import Result</h2>
+        </div>
+        <button onclick="document.getElementById('import-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-200 transition">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div id="import-modal-body" class="overflow-y-auto flex-1 px-6 py-5 space-y-4 text-sm"></div>
+      <div class="px-6 py-4 border-t border-gray-800 flex-shrink-0">
+        <button onclick="document.getElementById('import-modal').classList.add('hidden')" class="w-full bg-brand hover:bg-indigo-500 text-white text-sm font-semibold py-2 rounded-lg transition">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import Loading Overlay -->
+  <div id="import-loading" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl px-8 py-6 flex items-center gap-4 shadow-2xl">
+      <i data-lucide="loader" class="w-5 h-5 text-brand spin"></i>
+      <span class="text-sm text-gray-300">Importing scenarios…</span>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+
+    // ── Sidebar collapse ──────────────────────────────────────────────────────
+    const sidebar      = document.getElementById('sidebar');
+    const mainContent  = document.getElementById('main-content');
+    const sidebarToggle= document.getElementById('sidebar-toggle');
+
+    let sidebarCollapsed = false;
+
+    sidebarToggle.addEventListener('click', () => {
+      sidebarCollapsed = !sidebarCollapsed;
+      if (sidebarCollapsed) {
+        sidebar.classList.add('collapsed');
+        sidebar.style.width = '4rem';
+        mainContent.style.marginLeft = '4rem';
+        sidebarToggle.querySelector('i').setAttribute('data-lucide', 'panel-left-open');
+        sidebarToggle.title = 'Expand sidebar';
+      } else {
+        sidebar.classList.remove('collapsed');
+        sidebar.style.width = '16rem';
+        mainContent.style.marginLeft = '16rem';
+        sidebarToggle.querySelector('i').setAttribute('data-lucide', 'panel-left-close');
+        sidebarToggle.title = 'Collapse sidebar';
+      }
+      lucide.createIcons();
+    });
+
+    // ── Type pill toggle (shared for all pill groups) ─────────────────────────
+    function initPills(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.querySelectorAll('.type-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          const cb = pill.querySelector('input[type=checkbox]');
+          cb.checked = !cb.checked;
+          const span = pill.querySelector('span');
+          if (cb.checked) {
+            span.classList.add('border-brand', 'bg-brand/10', 'text-brand');
+            span.classList.remove('border-gray-700', 'bg-gray-950', 'text-gray-400');
+          } else {
+            span.classList.remove('border-brand', 'bg-brand/10', 'text-brand');
+            span.classList.add('border-gray-700', 'bg-gray-950', 'text-gray-400');
+          }
+        });
+      });
+    }
+
+    function getPillValues(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return [];
+      return [...container.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+    }
+
+    function setPillValues(containerId, values) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.querySelectorAll('.type-pill').forEach(pill => {
+        const cb = pill.querySelector('input[type=checkbox]');
+        const span = pill.querySelector('span');
+        const active = values.includes(cb.value);
+        cb.checked = active;
+        if (active) {
+          span.classList.add('border-brand', 'bg-brand/10', 'text-brand');
+          span.classList.remove('border-gray-700', 'bg-gray-950', 'text-gray-400');
+        } else {
+          span.classList.remove('border-brand', 'bg-brand/10', 'text-brand');
+          span.classList.add('border-gray-700', 'bg-gray-950', 'text-gray-400');
+        }
+      });
+    }
+
+    initPills('run-type-pills');
+    initPills('modal-type-pills');
+    setPillValues('run-type-pills', ['smoke']); // default
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
+    const suiteLabels = {
+      smoke: 'Smoke', navigation: 'Nav', forms: 'Forms',
+      responsive: 'Responsive', accessibility: 'A11y', quick: 'Quick'
+    };
+    const suiteColors = {
+      smoke: 'bg-blue-900/50 text-blue-300',
+      navigation: 'bg-purple-900/50 text-purple-300',
+      forms: 'bg-orange-900/50 text-orange-300',
+      responsive: 'bg-teal-900/50 text-teal-300',
+      accessibility: 'bg-green-900/50 text-green-300',
+      quick: 'bg-gray-800 text-gray-400',
+    };
+
+    function relativeTime(iso) {
+      const diff = Date.now() - new Date(iso).getTime();
+      const m = Math.floor(diff / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ago`;
+      return `${Math.floor(h / 24)}d ago`;
+    }
+
+    // ── View switching ────────────────────────────────────────────────────────
+    const navRun     = document.getElementById('nav-run');
+    const navLibrary = document.getElementById('nav-library');
+    const viewRun    = document.getElementById('view-run');
+    const viewLib    = document.getElementById('view-library');
+    const sidebarReports = document.getElementById('sidebar-reports');
+
+    function showView(name) {
+      const isLib = name === 'library';
+      viewRun.classList.toggle('hidden', isLib);
+      viewLib.classList.toggle('hidden', !isLib);
+      sidebarReports.classList.toggle('hidden', isLib);
+      navRun.className     = `nav-tab flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition ${!isLib ? 'bg-brand/10 text-brand' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'}`;
+      navLibrary.className = `nav-tab flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition ${isLib ? 'bg-brand/10 text-brand' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'}`;
+      if (isLib) loadLibrary();
+    }
+
+    navRun.addEventListener('click', e => { e.preventDefault(); showView('run'); });
+    navLibrary.addEventListener('click', e => { e.preventDefault(); showView('library'); });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // RUN TEST VIEW
+    // ═════════════════════════════════════════════════════════════════════════
+
+    document.querySelectorAll('.preset-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const type = card.dataset.type;
+        const desc = card.dataset.desc;
+        setPillValues('run-type-pills', [type]);
+        descInput.value = desc;
+        updateSuiteHint();
+        document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('border-brand/50', 'bg-brand/5'));
+        card.classList.add('border-brand/50', 'bg-brand/5');
+        urlInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        urlInput.focus();
+      });
+    });
+
+    const runBtn       = document.getElementById('run-btn');
+    const runIcon      = document.getElementById('run-icon');
+    const runLabel     = document.getElementById('run-label');
+    const clearBtn     = document.getElementById('clear-btn');
+    const urlInput     = document.getElementById('url-input');
+    const descInput    = document.getElementById('desc-input');
+    const typeSelect   = document.getElementById('test-type-select');
+    const suiteHint    = document.getElementById('suite-hint');
+    const consoleEl    = document.getElementById('console');
+    const resultBanner = document.getElementById('result-banner');
+    const resultIcon   = document.getElementById('result-icon');
+    const resultLabel  = document.getElementById('result-label');
+    const resultSummary= document.getElementById('result-summary');
+    const statusBadge  = document.getElementById('status-badge');
+    const reportLink   = document.getElementById('report-link');
+    const stepsPanel   = document.getElementById('steps-panel');
+    const stepsCount   = document.getElementById('steps-count');
+    const stepsTbody   = document.getElementById('steps-tbody');
+    const reportsList  = document.getElementById('reports-list');
+    const explanationCard  = document.getElementById('explanation-card');
+    const explanationText  = document.getElementById('explanation-text');
+    const loginUrl         = document.getElementById('login-url');
+    const loginEmail       = document.getElementById('login-email');
+    const loginPassword    = document.getElementById('login-password');
+
+    const hints = {
+      smoke:         'Smoke: Claude writes a spec → checks page loads, title, content, JS errors.',
+      navigation:    'Navigation: Claude tests all internal links respond correctly.',
+      forms:         'Forms: Claude fills form fields with dummy data and checks validation.',
+      responsive:    'Responsive: Claude screenshots at 375/768/1280px and checks for overflow.',
+      accessibility: 'Accessibility: axe-core audit + heading, alt-text, and label checks.',
+      quick:         'Quick: No AI — 8 built-in checks (HTTP, title, images, JS errors).',
+    };
+
+    function updateSuiteHint() {
+      const selected = getPillValues('run-type-pills');
+      if (!selected.length) { suiteHint.textContent = 'Select at least one test type above.'; return; }
+      suiteHint.textContent = selected.map(t => hints[t]).join(' · ');
+    }
+
+    document.getElementById('run-type-pills').addEventListener('click', updateSuiteHint);
+    updateSuiteHint();
+
+    function classifyLine(msg) {
+      if (msg.startsWith('🔧') || msg.startsWith('  ✓')) return 'line-tool';
+      if (msg.startsWith('💬')) return 'line-claude';
+      if (msg.includes('✅') || /^\s+\d+ passed/.test(msg)) return 'line-pass';
+      if (msg.includes('❌') || msg.startsWith('  ✗') || msg.startsWith('  ×') || /failed/.test(msg)) return 'line-fail';
+      if (msg.startsWith('🤖') || msg.startsWith('Generating') || msg.startsWith('Launching') || msg.startsWith('Spec')) return 'line-info';
+      if (msg.startsWith('[stderr]')) return 'line-error';
+      return 'text-gray-400';
+    }
+
+    function appendLine(msg, cls) {
+      const span = document.createElement('span');
+      span.className = 'block ' + (cls || 'text-gray-400');
+      span.textContent = msg;
+      consoleEl.appendChild(span);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function setRunning(running) {
+      runBtn.disabled = running;
+      runIcon.setAttribute('data-lucide', running ? 'loader' : 'play');
+      if (running) runIcon.classList.add('spin'); else runIcon.classList.remove('spin');
+      runLabel.textContent = running ? 'Running…' : 'Run Test';
+      lucide.createIcons();
+      statusBadge.classList.toggle('hidden', !running);
+      statusBadge.classList.toggle('flex', running);
+    }
+
+    function showResult(passed, summary, reportId, reportUrl) {
+      resultBanner.classList.remove('hidden');
+      if (passed) {
+        resultBanner.className = 'rounded-xl border px-5 py-4 bg-green-950/40 border-green-800';
+        resultIcon.setAttribute('data-lucide', 'circle-check-big');
+        resultIcon.className = 'w-5 h-5 mt-0.5 flex-shrink-0 text-green-400';
+        resultLabel.className = 'font-semibold text-sm text-green-400';
+        resultLabel.textContent = 'PASS — Test completed successfully';
+      } else {
+        resultBanner.className = 'rounded-xl border px-5 py-4 bg-red-950/40 border-red-800';
+        resultIcon.setAttribute('data-lucide', 'circle-x');
+        resultIcon.className = 'w-5 h-5 mt-0.5 flex-shrink-0 text-red-400';
+        resultLabel.className = 'font-semibold text-sm text-red-400';
+        resultLabel.textContent = 'FAIL — Test did not pass';
+      }
+      resultSummary.textContent = summary;
+      lucide.createIcons();
+
+      if (reportUrl) {
+        reportLink.href = reportUrl;
+        reportLink.innerHTML = '<i data-lucide="bar-chart-2" class="w-4 h-4"></i><span>View Playwright Report</span>';
+        reportLink.classList.remove('hidden');
+        reportLink.classList.add('flex');
+        lucide.createIcons();
+      } else if (reportId) {
+        reportLink.href = `/reports/${reportId}`;
+        reportLink.innerHTML = '<i data-lucide="file-text" class="w-4 h-4"></i><span>View Full Report</span>';
+        reportLink.classList.remove('hidden');
+        reportLink.classList.add('flex');
+        lucide.createIcons();
+      }
+    }
+
+    function showSteps(steps) {
+      if (!steps || steps.length === 0) return;
+      stepsTbody.innerHTML = '';
+      steps.forEach((s, i) => {
+        const pass = s.includes('✅');
+        const fail = s.includes('❌');
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-800/40';
+        tr.innerHTML = `
+          <td class="px-4 py-2 text-gray-600">${i + 1}</td>
+          <td class="px-4 py-2">${pass ? '<span class="text-green-400">✅</span>' : fail ? '<span class="text-red-400">❌</span>' : '<span class="text-gray-500">—</span>'}</td>
+          <td class="px-4 py-2 text-gray-300 max-w-lg truncate" title="${s.replace(/"/g, '&quot;')}">${s}</td>`;
+        stepsTbody.appendChild(tr);
+      });
+      stepsCount.textContent = `${steps.length} step${steps.length !== 1 ? 's' : ''}`;
+      stepsPanel.classList.remove('hidden');
+      stepsPanel.open = false;
+      lucide.createIcons();
+    }
+
+    async function loadReports() {
+      try {
+        const res = await fetch('/reports');
+        const list = await res.json();
+        if (!list.length) {
+          reportsList.innerHTML = '<p class="px-3 text-xs text-gray-700 italic">No runs yet</p>';
+          return;
+        }
+        reportsList.innerHTML = list.slice(0, 20).map(r => `
+          <a href="/reports/${r.id}" target="_blank"
+            class="flex flex-col px-3 py-2 rounded-lg hover:bg-gray-800 transition group">
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs font-medium ${r.passed ? 'text-green-400' : 'text-red-400'}">${r.passed ? '✅' : '❌'}</span>
+              <span class="text-xs text-gray-400 font-medium truncate">${suiteLabels[r.testType] || r.testType}</span>
+              <span class="ml-auto text-xs text-gray-700">${relativeTime(r.startedAt)}</span>
+            </div>
+            <span class="text-xs text-gray-600 truncate mt-0.5">${r.url}</span>
+          </a>`).join('');
+      } catch { /* server not ready */ }
+    }
+
+    loadReports();
+
+    runBtn.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url) { urlInput.focus(); return; }
+
+      const testTypes = getPillValues('run-type-pills');
+      if (!testTypes.length) { updateSuiteHint(); return; }
+
+      consoleEl.innerHTML = '';
+      resultBanner.classList.add('hidden');
+      stepsPanel.classList.add('hidden');
+      explanationCard.classList.add('hidden');
+      reportLink.classList.add('hidden');
+      reportLink.classList.remove('flex');
+      setRunning(true);
+
+      appendLine(`🤖 Starting [${testTypes.join(', ')}] test for: ${url}`, 'line-info');
+
+      try {
+        await streamSSE('/run-test', {
+          url, description: descInput.value.trim(), testTypes,
+          headed: headedMode,
+          loginUrl:  loginUrl.value.trim()  || undefined,
+          email:     loginEmail.value.trim() || undefined,
+          password:  loginPassword.value     || undefined,
+        }, handleRunEvent);
+      } catch (err) {
+        appendLine('Failed to connect: ' + err.message, 'line-error');
+      } finally {
+        setRunning(false);
+      }
+    });
+
+    function handleRunEvent(event) {
+      if (event.type === 'separator') {
+        appendLine('', '');
+        appendLine(`▶ Starting ${event.testType} test…`, 'line-info');
+        return;
+      }
+      if (event.type === 'log') {
+        appendLine(event.message, classifyLine(event.message));
+      } else if (event.type === 'result') {
+        appendLine('─'.repeat(48), 'text-gray-700');
+        appendLine(event.passed ? '✅  RESULT: PASS' : '❌  RESULT: FAIL', event.passed ? 'line-pass' : 'line-fail');
+        showResult(event.passed, event.summary, event.reportId, event.reportUrl);
+        showSteps(event.steps);
+        loadReports();
+      } else if (event.type === 'explanation_start') {
+        explanationCard.classList.remove('hidden');
+        explanationText.textContent = '';
+      } else if (event.type === 'explanation_chunk') {
+        explanationText.textContent += event.text;
+      } else if (event.type === 'error') {
+        appendLine('ERROR: ' + event.message, 'line-error');
+      }
+    }
+
+    clearBtn.addEventListener('click', () => {
+      consoleEl.innerHTML = '<span class="text-gray-600 italic">Output will appear here when a test runs…</span>';
+      resultBanner.classList.add('hidden');
+      stepsPanel.classList.add('hidden');
+      explanationCard.classList.add('hidden');
+      reportLink.classList.add('hidden');
+      reportLink.classList.remove('flex');
+      document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('border-brand/50', 'bg-brand/5'));
+      setPillValues('run-type-pills', ['smoke']);
+      updateSuiteHint();
+      urlInput.value = '';
+      descInput.value = '';
+      loginUrl.value = '';
+      loginEmail.value = '';
+      loginPassword.value = '';
+    });
+
+    urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') runBtn.click(); });
+
+    // ── Headed toggle ─────────────────────────────────────────────────────────
+    let headedMode = false;
+    const headedToggle = document.getElementById('headed-toggle');
+    const headedLabel  = document.getElementById('headed-label');
+
+    headedToggle.addEventListener('click', () => {
+      headedMode = !headedMode;
+      headedLabel.textContent = headedMode ? 'Visible Browser' : 'Headless';
+      if (headedMode) {
+        headedToggle.classList.add('border-teal-500', 'text-teal-300', 'bg-teal-900/20');
+        headedToggle.classList.remove('border-gray-700', 'text-gray-300', 'bg-gray-800');
+      } else {
+        headedToggle.classList.remove('border-teal-500', 'text-teal-300', 'bg-teal-900/20');
+        headedToggle.classList.add('border-gray-700', 'text-gray-300', 'bg-gray-800');
+      }
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // SSE helper
+    // ═════════════════════════════════════════════════════════════════════════
+    async function streamSSE(url, body, onEvent) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop();
+        for (const part of parts) {
+          if (!part.startsWith('data:')) continue;
+          let event;
+          try { event = JSON.parse(part.replace(/^data:\s*/, '')); } catch { continue; }
+          onEvent(event);
+        }
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // LIBRARY VIEW
+    // ═════════════════════════════════════════════════════════════════════════
+
+    let libProjects = [];
+    let activeModuleId = null;
+    let editingScenarioId = null;
+
+    async function loadLibrary() {
+      try {
+        const res = await fetch('/library/projects');
+        libProjects = await res.json();
+        renderTree();
+        if (activeModuleId) renderCards(activeModuleId);
+      } catch { /* ignore */ }
+    }
+
+    // ── Tree (flat module list) ───────────────────────────────────────────────
+    function renderTree() {
+      const tree = document.getElementById('project-tree');
+      const allModules = libProjects.flatMap(p => (p.modules || []).map(m => ({ ...m, _projectId: p.id })));
+      if (!allModules.length) {
+        tree.innerHTML = '<p class="px-4 py-2 text-xs text-gray-700 italic">No modules yet</p>';
+        return;
+      }
+      tree.innerHTML = allModules.map(m => `
+        <div class="flex items-center gap-1 px-3 py-1.5 rounded cursor-pointer tree-item group ${m.id === activeModuleId ? 'active' : 'hover:bg-gray-800'}"
+          id="mod-row-${m.id}" onclick="selectModule('${m.id}', '${esc(m.name)}')">
+          <i data-lucide="layers" class="w-3.5 h-3.5 ${m.id === activeModuleId ? 'text-indigo-400' : 'text-gray-500'} flex-shrink-0"></i>
+          <span class="text-xs ${m.id === activeModuleId ? 'text-indigo-300 font-medium' : 'text-gray-400'} flex-1 truncate">${esc(m.name)}</span>
+          <span class="text-xs text-gray-700 mr-1">${(m.scenarios||[]).length}</span>
+          <button onclick="event.stopPropagation();deleteModuleConfirm('${m.id}','${esc(m.name)}')"
+            class="w-4 h-4 flex items-center justify-center rounded hover:bg-gray-700 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
+            <i data-lucide="x" class="w-2.5 h-2.5"></i>
+          </button>
+        </div>`).join('');
+      lucide.createIcons();
+    }
+
+    function selectModule(moduleId, moduleName) {
+      activeModuleId = moduleId;
+      document.getElementById('lib-breadcrumb').innerHTML =
+        `<span class="text-gray-200 font-medium">${esc(moduleName)}</span>`;
+      renderTree();
+      renderCards(moduleId);
+    }
+
+    // ── New module (top-level "+ New Module" button) ───────────────────────────
+    document.getElementById('lib-new-module-btn').addEventListener('click', () => {
+      document.getElementById('new-module-form-inline').classList.toggle('hidden');
+      document.getElementById('new-module-name-inline').focus();
+    });
+
+    document.getElementById('new-module-save-inline').addEventListener('click', async () => {
+      const name = document.getElementById('new-module-name-inline').value.trim();
+      if (!name) return;
+      // Auto-assign to first project, or create a default project if none exists
+      let projectId;
+      if (libProjects.length) {
+        projectId = libProjects[0].id;
+      } else {
+        const proj = await fetch('/library/projects', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Default' }),
+        }).then(r => r.json());
+        projectId = proj.id;
+      }
+      await fetch('/library/modules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, name }),
+      });
+      document.getElementById('new-module-name-inline').value = '';
+      document.getElementById('new-module-form-inline').classList.add('hidden');
+      await loadLibrary();
+    });
+
+    document.getElementById('new-module-cancel-inline').addEventListener('click', () => {
+      document.getElementById('new-module-form-inline').classList.add('hidden');
+      document.getElementById('new-module-name-inline').value = '';
+    });
+
+    document.getElementById('new-module-name-inline').addEventListener('keydown', e => {
+      if (e.key === 'Enter')  document.getElementById('new-module-save-inline').click();
+      if (e.key === 'Escape') document.getElementById('new-module-cancel-inline').click();
+    });
+
+    // ── Cards ─────────────────────────────────────────────────────────────────
+    function renderCards(moduleId) {
+      const project = libProjects.find(p => p.modules && p.modules.find(m => m.id === moduleId));
+      const module  = project && project.modules.find(m => m.id === moduleId);
+      const scenarios = module ? module.scenarios : [];
+
+      const empty = document.getElementById('scenario-empty');
+      const grid  = document.getElementById('scenario-grid');
+
+      if (!scenarios.length) {
+        empty.innerHTML = `
+          <i data-lucide="inbox" class="w-12 h-12 text-gray-700 mb-3"></i>
+          <p class="text-sm text-gray-500">No scenarios in this module</p>
+          <button onclick="openScenarioModal()" class="mt-3 text-xs bg-brand/10 text-brand hover:bg-brand/20 px-3 py-1.5 rounded-lg transition">
+            + Add first scenario
+          </button>`;
+        empty.classList.remove('hidden');
+        grid.classList.add('hidden');
+        lucide.createIcons();
+        return;
+      }
+
+      empty.classList.add('hidden');
+      grid.classList.remove('hidden');
+      grid.innerHTML = scenarios.map(s => buildCard(s)).join('');
+      lucide.createIcons();
+      requestAnimationFrame(() => loadCardHistories());
+    }
+
+    function buildCard(s) {
+      const types = s.testTypes || (s.testType ? [s.testType] : ['smoke']);
+      const typeBadges = types.map(t =>
+        `<span class="text-xs px-2 py-0.5 rounded-full ${suiteColors[t] || 'bg-gray-800 text-gray-400'}">${suiteLabels[t] || t}</span>`
+      ).join('');
+      const tags = (s.tags || []).slice(0, 3).map(t =>
+        `<span class="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">${esc(t)}</span>`).join('');
+
+      return `
+        <div class="bg-gray-900 border border-gray-800 hover:border-gray-700 rounded-xl p-4 flex flex-col gap-3 transition">
+          <div class="flex items-start justify-between gap-2">
+            <p class="text-sm font-semibold text-gray-200 leading-tight">${esc(s.name)}</p>
+            <div class="flex flex-wrap gap-1 justify-end">${typeBadges}</div>
+          </div>
+          <p class="text-xs text-gray-600 truncate">${esc(s.url)}</p>
+          ${tags ? `<div class="flex flex-wrap gap-1">${tags}</div>` : ''}
+          <div id="card-status-${s.id}" class="text-xs text-gray-700 italic">Loading…</div>
+          <div class="flex gap-2 pt-1 border-t border-gray-800">
+            <button onclick="runScenario('${s.id}', false)"
+              class="flex-1 flex items-center justify-center gap-1.5 text-xs bg-brand/10 hover:bg-brand/20 text-brand font-semibold px-2 py-1.5 rounded-lg transition">
+              <i data-lucide="play" class="w-3 h-3"></i> Run
+            </button>
+            <button onclick="runScenario('${s.id}', true)"
+              class="flex items-center justify-center gap-1.5 text-xs bg-teal-900/30 hover:bg-teal-900/60 text-teal-400 px-2 py-1.5 rounded-lg transition" title="Run with visible browser">
+              <i data-lucide="monitor" class="w-3 h-3"></i>
+            </button>
+            <a id="card-report-${s.id}" href="#" target="_blank"
+              class="hidden items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 px-2 py-1.5 rounded-lg transition" title="View last report">
+              <i data-lucide="bar-chart-2" class="w-3 h-3"></i>
+            </a>
+            <button onclick="editScenario('${s.id}')"
+              class="flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-2 py-1.5 rounded-lg transition">
+              <i data-lucide="pencil" class="w-3 h-3"></i>
+            </button>
+            <button onclick="deleteScenario('${s.id}', '${esc(s.name)}')"
+              class="flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-red-900/50 text-gray-500 hover:text-red-400 px-2 py-1.5 rounded-lg transition">
+              <i data-lucide="trash-2" class="w-3 h-3"></i>
+            </button>
+          </div>
+        </div>`;
+    }
+
+    // Load last run status for each visible card
+    async function loadCardHistories() {
+      const project = libProjects.find(p => p.modules && p.modules.find(m => m.id === activeModuleId));
+      const module  = project && project.modules.find(m => m.id === activeModuleId);
+      if (!module) return;
+      for (const s of module.scenarios) {
+        const el = document.getElementById(`card-status-${s.id}`);
+        if (!el) continue;
+        try {
+          const res = await fetch(`/library/scenarios/${s.id}/history`);
+          const history = await res.json();
+          const reportBtn = document.getElementById(`card-report-${s.id}`);
+          if (!history.length) {
+            el.textContent = 'Never run';
+            if (reportBtn) { reportBtn.classList.add('hidden'); reportBtn.classList.remove('flex'); }
+          } else {
+            const last = history[0];
+            el.innerHTML = `<span class="${last.passed ? 'text-green-500' : 'text-red-400'}">${last.passed ? '✅ Passed' : '❌ Failed'}</span> · ${relativeTime(last.runAt)}`;
+            if (reportBtn && last.reportId) {
+              reportBtn.href = `/playwright-report/${last.reportId}/index.html`;
+              reportBtn.classList.remove('hidden');
+              reportBtn.classList.add('flex');
+              lucide.createIcons();
+            }
+          }
+        } catch { el.textContent = ''; }
+      }
+    }
+
+    // ── Run scenario ──────────────────────────────────────────────────────────
+    function runScenario(scenarioId, headed = false) {
+      const statusEl = document.getElementById(`card-status-${scenarioId}`);
+      if (!statusEl) return;
+
+      // Show mini console in the card
+      statusEl.innerHTML = `<span class="text-gray-500">▶ ${headed ? '🖥 Opening browser…' : 'Starting…'}</span>`;
+      const logLines = [];
+
+      streamSSE(`/library/scenarios/${scenarioId}/run`, { headed }, event => {
+        if (event.type === 'log') {
+          logLines.push(event.message);
+          const last = logLines[logLines.length - 1];
+          statusEl.innerHTML = `<span class="text-gray-500 truncate block">${esc(last)}</span>`;
+        } else if (event.type === 'result') {
+          statusEl.innerHTML = `<span class="${event.passed ? 'text-green-500' : 'text-red-400'}">${event.passed ? '✅ Passed' : '❌ Failed'}</span> · just now`;
+          const reportBtn = document.getElementById(`card-report-${scenarioId}`);
+          if (reportBtn && event.reportId) {
+            reportBtn.href = `/playwright-report/${event.reportId}/index.html`;
+            reportBtn.classList.remove('hidden');
+            reportBtn.classList.add('flex');
+            lucide.createIcons();
+          }
+          loadLibrary();
+        } else if (event.type === 'error') {
+          statusEl.innerHTML = `<span class="text-red-400">Error: ${esc(event.message)}</span>`;
+        }
+      }).catch(err => {
+        statusEl.innerHTML = `<span class="text-red-400">${esc(err.message)}</span>`;
+      });
+    }
+
+    // ── Edit helper ───────────────────────────────────────────────────────────
+    function editScenario(id) {
+      for (const p of libProjects) {
+        for (const m of (p.modules || [])) {
+          const s = (m.scenarios || []).find(s => s.id === id);
+          if (s) { openScenarioModal(s); return; }
+        }
+      }
+    }
+
+    // ── Delete helpers ────────────────────────────────────────────────────────
+    async function deleteScenario(id, name) {
+      if (!confirm(`Delete scenario "${name}"?`)) return;
+      await fetch(`/library/scenarios/${id}`, { method: 'DELETE' });
+      await loadLibrary();
+      if (activeModuleId) renderCards(activeModuleId);
+    }
+
+    async function deleteModuleConfirm(id, name) {
+      if (!confirm(`Delete module "${name}" and all its scenarios?`)) return;
+      await fetch(`/library/modules/${id}`, { method: 'DELETE' });
+      if (activeModuleId === id) {
+        activeModuleId = null;
+        document.getElementById('lib-breadcrumb').innerHTML = '<span class="text-gray-600 italic">Select a module to view scenarios</span>';
+        document.getElementById('scenario-grid').classList.add('hidden');
+        document.getElementById('scenario-empty').classList.remove('hidden');
+        document.getElementById('scenario-empty').innerHTML = `
+          <i data-lucide="folder-open" class="w-12 h-12 text-gray-700 mb-3"></i>
+          <p class="text-sm text-gray-500">Select a module from the list</p>`;
+        lucide.createIcons();
+      }
+      await loadLibrary();
+    }
+
+
+
+    // ── Scenario modal ────────────────────────────────────────────────────────
+    const scenarioModal    = document.getElementById('scenario-modal');
+    const modalTitle       = document.getElementById('modal-title');
+    const modalModule      = document.getElementById('modal-module');
+    const modalName        = document.getElementById('modal-name');
+    const modalUrl         = document.getElementById('modal-url');
+    const modalDescription = document.getElementById('modal-description');
+    const modalTags        = document.getElementById('modal-tags');
+    const modalAuthLoginUrl= document.getElementById('modal-auth-login-url');
+    const modalAuthEmail   = document.getElementById('modal-auth-email');
+    const modalAuthPassword= document.getElementById('modal-auth-password');
+
+    function openScenarioModal(scenario) {
+      editingScenarioId = scenario ? scenario.id : null;
+      modalTitle.textContent = scenario ? 'Edit Scenario' : 'New Scenario';
+
+      // Populate module dropdown (flat, no project prefix)
+      modalModule.innerHTML = '<option value="">— select module —</option>';
+      libProjects.forEach(p => {
+        (p.modules || []).forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.name;
+          if (scenario ? scenario.moduleId === m.id : m.id === activeModuleId) opt.selected = true;
+          modalModule.appendChild(opt);
+        });
+      });
+
+      modalName.value        = scenario ? scenario.name : '';
+      modalUrl.value         = scenario ? scenario.url : '';
+      const defaultTypes = scenario ? (scenario.testTypes || [scenario.testType].filter(Boolean)) : ['smoke'];
+      setPillValues('modal-type-pills', defaultTypes);
+      modalDescription.value = scenario ? (scenario.description || '') : '';
+      modalTags.value        = scenario ? (scenario.tags || []).join(', ') : '';
+      modalAuthLoginUrl.value = scenario && scenario.authConfig ? scenario.authConfig.loginUrl : '';
+      modalAuthEmail.value    = scenario && scenario.authConfig ? scenario.authConfig.email : '';
+      modalAuthPassword.value = scenario && scenario.authConfig ? scenario.authConfig.password : '';
+
+      scenarioModal.classList.remove('hidden');
+      lucide.createIcons();
+      setTimeout(() => modalName.focus(), 50);
+    }
+
+    function closeModal() {
+      scenarioModal.classList.add('hidden');
+      editingScenarioId = null;
+    }
+
+    document.getElementById('modal-close').addEventListener('click', closeModal);
+    document.getElementById('modal-cancel').addEventListener('click', closeModal);
+    scenarioModal.addEventListener('click', e => { if (e.target === scenarioModal) closeModal(); });
+
+    document.getElementById('modal-save').addEventListener('click', async () => {
+      const moduleId = modalModule.value;
+      const name     = modalName.value.trim();
+      const url      = modalUrl.value.trim();
+      if (!moduleId || !name || !url) {
+        alert('Module, name, and URL are required.');
+        return;
+      }
+
+      const authLoginUrl = modalAuthLoginUrl.value.trim();
+      const authEmail    = modalAuthEmail.value.trim();
+      const authPassword = modalAuthPassword.value;
+      const authConfig   = authLoginUrl && authEmail && authPassword
+        ? { loginUrl: authLoginUrl, email: authEmail, password: authPassword }
+        : undefined;
+
+      const testTypes = getPillValues('modal-type-pills');
+      if (!testTypes.length) { alert('Select at least one test type.'); return; }
+
+      const payload = {
+        moduleId,
+        name,
+        url,
+        testTypes,
+        description: modalDescription.value.trim() || undefined,
+        tags: modalTags.value.split(',').map(t => t.trim()).filter(Boolean),
+        authConfig,
+      };
+
+      if (editingScenarioId) {
+        await fetch(`/library/scenarios/${editingScenarioId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await fetch('/library/scenarios', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      closeModal();
+      await loadLibrary();
+      if (activeModuleId) renderCards(activeModuleId);
+    });
+
+    document.getElementById('lib-new-scenario-btn').addEventListener('click', () => openScenarioModal());
+
+    // ── Excel Import ──────────────────────────────────────────────────────────
+    const importBtn  = document.getElementById('lib-import-btn');
+    const importFile = document.getElementById('lib-import-file');
+
+    importBtn.addEventListener('click', () => importFile.click());
+
+    importFile.addEventListener('change', async () => {
+      const file = importFile.files[0];
+      if (!file) return;
+      importFile.value = ''; // reset so same file can be re-uploaded
+
+      const loading = document.getElementById('import-loading');
+      loading.classList.remove('hidden');
+      lucide.createIcons();
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch('/library/import', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        loading.classList.add('hidden');
+
+        if (!res.ok) {
+          showImportResult({ created: 0, createdNames: [], errors: [{ row: 0, error: data.error || 'Unknown error' }] });
+          return;
+        }
+
+        showImportResult(data);
+        if (data.created > 0) {
+          await loadLibrary();
+          if (activeModuleId) renderCards(activeModuleId);
+        }
+      } catch (err) {
+        loading.classList.add('hidden');
+        showImportResult({ created: 0, createdNames: [], errors: [{ row: 0, error: err.message }] });
+      }
+    });
+
+    function showImportResult({ created, createdNames, errors }) {
+      const body = document.getElementById('import-modal-body');
+      let html = '';
+
+      if (created > 0) {
+        html += `
+          <div class="flex items-center gap-3 bg-green-900/20 border border-green-800/50 rounded-lg px-4 py-3">
+            <i data-lucide="check-circle-2" class="w-5 h-5 text-green-400 flex-shrink-0"></i>
+            <div>
+              <p class="text-green-300 font-semibold">${created} scenario${created !== 1 ? 's' : ''} imported successfully</p>
+              <p class="text-xs text-green-700 mt-0.5">They are now available in your Scenario Library</p>
+            </div>
+          </div>`;
+        if (createdNames && createdNames.length) {
+          html += `<ul class="space-y-1 text-xs text-gray-400 max-h-40 overflow-y-auto border border-gray-800 rounded-lg px-3 py-2">
+            ${createdNames.map(n => `<li class="flex items-center gap-2"><span class="text-green-600">✓</span>${esc(n)}</li>`).join('')}
+          </ul>`;
+        }
+      }
+
+      if (errors && errors.length) {
+        html += `
+          <div>
+            <p class="text-xs font-semibold text-red-400 uppercase tracking-widest mb-2">${errors.length} row${errors.length !== 1 ? 's' : ''} skipped</p>
+            <ul class="space-y-1 text-xs max-h-48 overflow-y-auto border border-gray-800 rounded-lg px-3 py-2">
+              ${errors.map(e => `<li class="flex items-start gap-2 text-gray-400"><span class="text-red-500 flex-shrink-0">${e.row > 0 ? `Row ${e.row}:` : 'Error:'}</span><span>${esc(e.error)}</span></li>`).join('')}
+            </ul>
+          </div>`;
+      }
+
+      if (created === 0 && (!errors || !errors.length)) {
+        html = '<p class="text-gray-500 text-sm">No data rows found in the file. Please check the format matches the template.</p>';
+      }
+
+      // Format reminder
+      html += `
+        <div class="text-xs text-gray-600 border-t border-gray-800 pt-3">
+          Expected columns: <span class="text-gray-500">Module · Scenario Name · URL · Test Types · Description · Tags · Login URL · Login Email · Login Password</span>
+          <br/><a href="/library/import/template" download class="text-brand hover:underline mt-1 inline-block">Download template ↓</a>
+        </div>`;
+
+      body.innerHTML = html;
+      document.getElementById('import-modal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    // ── Utility ───────────────────────────────────────────────────────────────
+    function esc(str) {
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+  </script>
+</body>
+</html>
