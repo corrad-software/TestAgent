@@ -11,13 +11,19 @@ const apiProxy = {
   },
 };
 
+const sseProxy = {
+  ...apiProxy,
+  timeout: 0,       // no timeout — SSE connections stay open until client/server closes
+  proxyTimeout: 0,
+};
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     proxy: {
-      "/run-test":          apiProxy,
-      "/library":           apiProxy,
+      "/run-test":          sseProxy,
+      "/library":           sseProxy,
       "/reports":           apiProxy,
       "/playwright-report": apiProxy,
       "/app-settings":      apiProxy,

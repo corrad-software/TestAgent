@@ -389,10 +389,15 @@ app.post("/run-test", async (req, res) => {
       const specPath = path.join(tmpDir, `quick-record-${Date.now()}.spec.ts`);
       const args = ["playwright", "codegen", url, "-o", specPath, "--target", "playwright-test"];
       onLog(`🎬 Launching Playwright Codegen for ${url}`);
-      const proc = spawn("npx", args, { cwd: process.cwd(), env: { ...process.env, FORCE_COLOR: "0" } });
-      proc.stdout?.on("data", d => onLog(d.toString().trim()));
-      proc.stderr?.on("data", d => onLog(d.toString().trim()));
-      await new Promise<void>(resolve => proc.on("close", () => resolve()));
+      const proc = spawn("npx", args, { cwd: process.cwd(), env: { ...process.env, FORCE_COLOR: "0" }, stdio: ["ignore", "pipe", "pipe"], shell: true });
+      proc.stdout.on("data", d => onLog(d.toString().trim()));
+      proc.stderr.on("data", d => onLog(d.toString().trim()));
+
+      // Send heartbeat every 15s to keep SSE connection alive through proxies
+      const heartbeat = setInterval(() => res.write(":heartbeat\n\n"), 15_000);
+      req.on("close", () => { clearInterval(heartbeat); proc.kill(); });
+
+      await new Promise<void>(resolve => proc.on("close", () => { clearInterval(heartbeat); resolve(); }));
       try {
         const code = await fs.readFile(specPath, "utf-8");
         send({ type: "recordEnd", code });
@@ -619,7 +624,12 @@ app.post("/library/scenarios/:id/record", async (req, res) => {
       cwd: process.cwd(),
       env: { ...process.env, FORCE_COLOR: "0" },
       stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
     });
+
+    // Send heartbeat every 15s to keep SSE connection alive through proxies
+    const heartbeat = setInterval(() => res.write(":heartbeat\n\n"), 15_000);
+    req.on("close", () => { clearInterval(heartbeat); proc.kill(); });
 
     proc.stdout.on("data", (chunk: Buffer) => {
       const lines = chunk.toString().split("\n").filter(l => l.trim());
@@ -636,6 +646,7 @@ app.post("/library/scenarios/:id/record", async (req, res) => {
     });
 
     proc.on("close", async (code) => {
+      clearInterval(heartbeat);
       try {
         const specContent = await fs.readFile(specPath, "utf-8");
         if (specContent.trim().length > 0) {

@@ -39,6 +39,7 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
   const exitCode = await new Promise<number>((resolve) => {
     const proc = spawn("npx", args, {
       cwd,
+      shell: true,
       env: {
         ...process.env,
         PW_HTML_REPORT: reportDirRelative,
