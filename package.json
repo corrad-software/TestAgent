@@ -4,6 +4,7 @@
   "description": "AI-powered Playwright test agent",
   "main": "dist/agent.js",
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "build": "tsc && npm run build:client",
     "start": "ts-node src/server.ts",
     "dev": "concurrently \"ts-node --watch src/server.ts\" \"npm --prefix client run dev\"",
