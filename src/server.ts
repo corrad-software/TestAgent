@@ -36,6 +36,7 @@ import {
   deleteMember,
   getDashboardStats,
   getDailyStats,
+  getProjectRuns,
   getRoles,
   createRole,
   updateRole,
@@ -92,7 +93,7 @@ app.post("/auth/login", async (req, res) => {
   }
   const token = signToken({ userId: user.id, email: user.email, role: user.role });
   res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
-  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
+  res.json({ id: user.id, email: user.email, name: user.name, role: user.role, avatarUrl: user.avatarUrl });
 });
 
 app.post("/auth/logout", (_req, res) => {
@@ -102,7 +103,7 @@ app.post("/auth/logout", (_req, res) => {
 
 app.get("/auth/me", requireAuth, async (req, res) => {
   const { userId } = (req as any).user;
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true } });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true, avatarUrl: true } });
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
   res.json(user);
 });
@@ -123,6 +124,103 @@ app.put("/auth/password", requireAuth, async (req, res) => {
 
 // ─── Apply auth middleware to all subsequent routes ───────────────────────────
 app.use(requireAuth);
+
+// ─── User Management (admin only) ───────────────────────────────────────────
+app.get("/users", requireAdmin, async (_req, res) => {
+  const users = await prisma.user.findMany({
+    select: { id: true, email: true, name: true, role: true, avatarUrl: true, createdAt: true, updatedAt: true },
+    orderBy: { createdAt: "desc" },
+  });
+  // Also fetch project memberships for each user (by email match)
+  const members = await prisma.member.findMany({
+    select: { email: true, projectId: true, role: true, project: { select: { id: true, name: true } } },
+  });
+  const membersByEmail = new Map<string, { projectId: string; projectName: string; role: string }[]>();
+  for (const m of members) {
+    const list = membersByEmail.get(m.email) ?? [];
+    list.push({ projectId: m.project.id, projectName: m.project.name, role: m.role });
+    membersByEmail.set(m.email, list);
+  }
+  res.json(users.map(u => ({ ...u, projects: membersByEmail.get(u.email) ?? [] })));
+});
+
+app.post("/users", requireAdmin, async (req, res) => {
+  const { email, name, password, role, avatarUrl } = req.body as { email?: string; name?: string; password?: string; role?: string; avatarUrl?: string };
+  if (!email || !name || !password) { res.status(400).json({ error: "Email, name, and password required" }); return; }
+  if (password.length < 6) { res.status(400).json({ error: "Password must be at least 6 characters" }); return; }
+  const exists = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+  if (exists) { res.status(409).json({ error: "User with this email already exists" }); return; }
+  const user = await prisma.user.create({
+    data: { email: email.toLowerCase().trim(), name, passwordHash: await hashPassword(password), role: role ?? "Tester", avatarUrl: avatarUrl || null },
+    select: { id: true, email: true, name: true, role: true, avatarUrl: true, createdAt: true, updatedAt: true },
+  });
+  res.status(201).json(user);
+});
+
+app.put("/users/:id", requireAdmin, async (req, res) => {
+  const id = req.params.id as string;
+  const { name, email, role, avatarUrl } = req.body as { name?: string; email?: string; role?: string; avatarUrl?: string };
+  const data: any = {};
+  if (name) data.name = name;
+  if (email) data.email = email.toLowerCase().trim();
+  if (role) data.role = role;
+  if (avatarUrl !== undefined) data.avatarUrl = avatarUrl || null;
+  try {
+    const user = await prisma.user.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, name: true, role: true, avatarUrl: true, createdAt: true, updatedAt: true },
+    });
+    res.json(user);
+  } catch { res.status(404).json({ error: "User not found" }); }
+});
+
+app.delete("/users/:id", requireAdmin, async (req, res) => {
+  const id = req.params.id as string;
+  const { userId } = (req as any).user;
+  if (id === userId) { res.status(400).json({ error: "Cannot delete your own account" }); return; }
+  try {
+    await prisma.user.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch { res.status(404).json({ error: "User not found" }); }
+});
+
+app.put("/users/:id/password", requireAdmin, async (req, res) => {
+  const id = req.params.id as string;
+  const { password } = req.body as { password?: string };
+  if (!password || password.length < 6) { res.status(400).json({ error: "Password must be at least 6 characters" }); return; }
+  try {
+    await prisma.user.update({ where: { id }, data: { passwordHash: await hashPassword(password) } });
+    res.json({ ok: true });
+  } catch { res.status(404).json({ error: "User not found" }); }
+});
+
+// Assign user to project (creates member entry)
+app.post("/users/:id/assign", requireAdmin, async (req, res) => {
+  const id = req.params.id as string;
+  const { projectId, role } = req.body as { projectId?: string; role?: string };
+  if (!projectId) { res.status(400).json({ error: "projectId required" }); return; }
+  const user = await prisma.user.findUnique({ where: { id }, select: { name: true, email: true, avatarUrl: true } });
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
+  const existing = await prisma.member.findFirst({ where: { projectId, email: user.email } });
+  if (existing) { res.status(409).json({ error: "User already assigned to this project" }); return; }
+  const member = await prisma.member.create({
+    data: { projectId, name: user.name, email: user.email, role: role ?? "Tester", avatarUrl: user.avatarUrl },
+  });
+  res.status(201).json(member);
+});
+
+// Unassign user from project
+app.delete("/users/:id/assign/:projectId", requireAdmin, async (req, res) => {
+  const id = req.params.id as string;
+  const pId = req.params.projectId as string;
+  const user = await prisma.user.findUnique({ where: { id }, select: { email: true } });
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
+  const member = await prisma.member.findFirst({ where: { projectId: pId, email: user.email } });
+  if (!member) { res.status(404).json({ error: "User not assigned to this project" }); return; }
+  await prisma.member.delete({ where: { id: member.id } });
+  res.json({ ok: true });
+});
 
 // ─── Run ID generator ─────────────────────────────────────────────────────────
 function makeRunId(testType: string): string {
@@ -263,17 +361,12 @@ async function runOneType(
 
 // ─── POST /run-test ───────────────────────────────────────────────────────────
 app.post("/run-test", async (req, res) => {
-  const { url, description, testTypes: rawTestTypes, testType: rawTestType, demo, loginUrl, email, password, headed } = req.body as {
+  const { url, description, testTypes: rawTestTypes, testType: rawTestType, demo, loginUrl, email, password, headed, record, enrich, customSpec } = req.body as {
     url: string; description?: string; testTypes?: string[]; testType?: string;
     demo?: boolean; loginUrl?: string; email?: string; password?: string; headed?: boolean;
+    record?: boolean; enrich?: boolean; customSpec?: string;
   };
 
-  const testTypes: TestType[] = demo
-    ? ["quick"]
-    : rawTestTypes?.length ? rawTestTypes as TestType[]
-    : [(rawTestType as TestType) ?? "smoke"];
-
-  const authConfig = (loginUrl && email && password) ? { loginUrl, email, password } : undefined;
   if (!url) { res.status(400).json({ error: "url is required" }); return; }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -284,9 +377,49 @@ app.post("/run-test", async (req, res) => {
   const onLog = (msg: string) => send({ type: "log", message: msg });
 
   try {
+    // ── Record mode ──────────────────────────────────────────────────────
+    if (record) {
+      const { spawn } = await import("child_process");
+      const tmpDir = path.join(process.cwd(), "generated-tests");
+      await fs.mkdir(tmpDir, { recursive: true });
+      const specPath = path.join(tmpDir, `quick-record-${Date.now()}.spec.ts`);
+      const args = ["playwright", "codegen", url, "-o", specPath, "--target", "playwright-test"];
+      onLog(`🎬 Launching Playwright Codegen for ${url}`);
+      const proc = spawn("npx", args, { cwd: process.cwd(), env: { ...process.env, FORCE_COLOR: "0" } });
+      proc.stdout?.on("data", d => onLog(d.toString().trim()));
+      proc.stderr?.on("data", d => onLog(d.toString().trim()));
+      await new Promise<void>(resolve => proc.on("close", () => resolve()));
+      try {
+        const code = await fs.readFile(specPath, "utf-8");
+        send({ type: "recordEnd", code });
+        await fs.unlink(specPath).catch(() => {});
+      } catch {
+        send({ type: "error", message: "No code was recorded. Did you close the browser without performing actions?" });
+      }
+      res.end();
+      return;
+    }
+
+    // ── Enrich mode ──────────────────────────────────────────────────────
+    if (enrich && customSpec) {
+      const { enrichWithAssertions } = await import("./aiAssist");
+      const enriched = await enrichWithAssertions(customSpec, url, description, onLog);
+      send({ type: "enriched", code: enriched });
+      res.end();
+      return;
+    }
+
+    // ── Normal run ───────────────────────────────────────────────────────
+    const testTypes: TestType[] = demo
+      ? ["quick"]
+      : rawTestTypes?.length ? rawTestTypes as TestType[]
+      : [(rawTestType as TestType) ?? "smoke"];
+
+    const authConfig = (loginUrl && email && password) ? { loginUrl, email, password } : undefined;
+
     for (let i = 0; i < testTypes.length; i++) {
       if (i > 0) send({ type: "separator", testType: testTypes[i] });
-      await runOneType(testTypes[i], url, description, authConfig, send, onLog, headed);
+      await runOneType(testTypes[i], url, description, authConfig, send, onLog, headed, customSpec);
     }
   } catch (err) {
     send({ type: "error", message: (err as Error).message });
@@ -332,9 +465,15 @@ app.put("/app-settings", requireAdmin, async (req, res) => {
 });
 
 // ─── Library: Projects ────────────────────────────────────────────────────────
-app.get("/library/projects", async (_req, res) => {
-  try { res.json(await getProjectTree()); }
-  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+app.get("/library/projects", async (req, res) => {
+  try {
+    const { email, role } = (req as any).user as { email: string; role: string };
+    const all = await getProjectTree();
+    // Admins see everything; others see only projects they're a member of
+    if (role === "Admin") { res.json(all); return; }
+    const filtered = all.filter(p => p.members?.some((m: any) => m.email === email));
+    res.json(filtered);
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 app.post("/library/projects",     requireAdmin, async (req, res) => {
   try { res.json(await createProject(req.body)); }
@@ -617,6 +756,11 @@ app.get("/library/projects/:id/daily-stats", async (req, res) => {
 });
 app.get("/library/daily-stats", async (_req, res) => {
   try { res.json(await getDailyStats()); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+// Project runs (for report history page)
+app.get("/library/projects/:id/runs", async (req, res) => {
+  try { res.json(await getProjectRuns(req.params.id)); }
   catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 

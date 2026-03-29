@@ -17,21 +17,6 @@ const MODELS = [
 
 const TEST_TYPES = Object.entries(SUITE_LABELS).map(([value, label]) => ({ value, label }));
 
-function TabBtn({ label, icon: Icon, active, onClick }: {
-  label: string; icon: React.FC<{ className?: string }>;
-  active: boolean; onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition whitespace-nowrap
-        ${active ? "bg-emerald-500/10 text-emerald-400" : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"}`}
-    >
-      <Icon className="w-4 h-4" />
-      {label}
-    </button>
-  );
-}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -89,12 +74,11 @@ export default function AppSettings() {
   return (
     <div className="flex flex-col h-screen">
       {/* Topbar */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
-        <div>
+      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 h-13 flex items-center gap-4 shrink-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-base font-semibold text-white">Application Settings</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Global configuration for TestAgent</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {error && (
             <span className="flex items-center gap-1.5 text-xs text-red-400">
               <AlertCircle className="w-3.5 h-3.5" /> {error}
@@ -108,7 +92,7 @@ export default function AppSettings() {
           <button
             onClick={handleSave}
             disabled={saveMut.isPending}
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+            className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
           >
             <Save className="w-3.5 h-3.5" />
             {saveMut.isPending ? "Saving…" : "Save Changes"}
@@ -116,18 +100,31 @@ export default function AppSettings() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Tab sidebar */}
-        <aside className="w-52 shrink-0 border-r border-gray-800 p-3 space-y-1">
-          <TabBtn label="AI Configuration" icon={Bot}      active={tab === "ai"}            onClick={() => setTab("ai")} />
-          <TabBtn label="Test Defaults"    icon={Sliders}  active={tab === "defaults"}      onClick={() => setTab("defaults")} />
-          <TabBtn label="Reports"          icon={FileText} active={tab === "reports"}       onClick={() => setTab("reports")} />
-          <TabBtn label="Notifications"    icon={Bell}     active={tab === "notifications"} onClick={() => setTab("notifications")} />
-        </aside>
+      {/* Tab bar */}
+      <div className="border-b border-gray-800 px-6 pt-2 flex gap-1 shrink-0 bg-gray-950">
+        {([
+          { id: "ai" as Tab,            icon: Bot,      label: "AI Configuration" },
+          { id: "defaults" as Tab,      icon: Sliders,  label: "Test Defaults" },
+          { id: "reports" as Tab,       icon: FileText, label: "Reports" },
+          { id: "notifications" as Tab, icon: Bell,     label: "Notifications" },
+        ]).map(({ id, icon: Icon, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition
+              ${tab === id
+                ? "border-emerald-500 text-emerald-400"
+                : "border-transparent text-gray-500 hover:text-gray-300"}`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </button>
+        ))}
+      </div>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-xl space-y-6">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-xl space-y-6">
 
             {/* ── AI Configuration ───────────────────────────────────────── */}
             {tab === "ai" && (
@@ -171,6 +168,21 @@ export default function AppSettings() {
                       className="flex-1 accent-emerald-500"
                     />
                     <span className="w-8 text-right text-sm font-mono text-gray-200">{form.maxIterations ?? 20}</span>
+                  </div>
+                </Field>
+
+                <Field label="AI Budget (USD)" hint="Set a spending limit for AI calls. Set to 0 for unlimited.">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-400">$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.aiBudget ?? 0}
+                      onChange={e => set("aiBudget", parseFloat(e.target.value) || 0)}
+                      className={inputCls + " max-w-40"}
+                      placeholder="0.00"
+                    />
                   </div>
                 </Field>
               </>
@@ -319,8 +331,7 @@ export default function AppSettings() {
               </>
             )}
 
-          </div>
-        </main>
+        </div>
       </div>
     </div>
   );

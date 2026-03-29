@@ -4,20 +4,28 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
   Layers, Inbox, FolderOpen, BarChart2, X, Loader,
-  CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search,
+  CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search, Settings,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
+import { ProjectSettingsModal } from "./Settings";
 
 export default function Library() {
+  const { projectId } = useParams<{ projectId: string }>();
+  return <LibraryContent projectId={projectId!} />;
+}
+
+export function LibraryContent({ projectId, embedded = false }: { projectId: string; embedded?: boolean }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const { projectId } = useParams<{ projectId: string }>();
   const [activeModuleId,  setActiveModuleId]  = useState<string | null>(null);
   const [showScenarioModal, setShowScenarioModal] = useState(false);
   const [editingScenario,   setEditingScenario]   = useState<api.Scenario | null>(null);
   const [selectedScenario,  setSelectedScenario]  = useState<api.Scenario | null>(null);
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
+
+  // Project settings modal
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
 
   // Search & filter state
   const [searchQuery, setSearchQuery] = useState("");
@@ -136,27 +144,61 @@ export default function Library() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Topbar */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-3 flex items-center justify-between flex-shrink-0 gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={() => navigate("/")}
-            className="flex items-center gap-1.5 text-gray-500 hover:text-gray-200 transition text-xs"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span className="hidden sm:inline">Projects</span>
-          </button>
-          <div className="w-px h-5 bg-gray-800" />
-          <div>
-            <h1 className="text-base font-semibold text-white">{activeProject?.name ?? "Project"}</h1>
-            {activeProject?.description && (
-              <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">{activeProject.description}</p>
-            )}
+    <div className={embedded ? "flex flex-col flex-1 min-h-0" : "flex flex-col h-screen"}>
+      {/* Topbar — only in standalone mode */}
+      {!embedded && (
+        <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 h-13 flex items-center justify-between shrink-0 gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={() => navigate("/")}
+              className="flex items-center gap-1.5 text-gray-500 hover:text-gray-200 transition text-xs"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Projects</span>
+            </button>
+            <div className="w-px h-5 bg-gray-800" />
+            <div className="flex items-center gap-2">
+              <div>
+                <h1 className="text-base font-semibold text-white">{activeProject?.name ?? "Project"}</h1>
+                {activeProject?.description && (
+                  <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">{activeProject.description}</p>
+                )}
+              </div>
+              <button
+                onClick={() => setShowProjectSettings(true)}
+                title="Project settings"
+                className="p-1.5 rounded-lg text-gray-500 hover:text-emerald-400 hover:bg-gray-800 transition"
+              >
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <a href="/library/import/template" download
+              className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition">
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Template</span>
+            </a>
+            <label className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Import</span>
+              <input type="file" accept=".xlsx,.xls,.csv,.tc,.groovy" multiple className="hidden"
+                onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
+            </label>
+            <button
+              onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
+              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
+            >
+              <Plus className="w-4 h-4" /> New Scenario
+            </button>
+          </div>
+        </header>
+      )}
+
+      {/* Action bar in embedded mode */}
+      {embedded && (
+        <div className="flex items-center justify-end gap-2 px-4 py-2 border-b border-gray-800 shrink-0">
           <a href="/library/import/template" download
             className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition">
             <Download className="w-3.5 h-3.5" />
@@ -170,12 +212,12 @@ export default function Library() {
           </label>
           <button
             onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
-            className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+            className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
           >
             <Plus className="w-4 h-4" /> New Scenario
           </button>
         </div>
-      </header>
+      )}
 
       {/* Two-panel body */}
       <div className="flex flex-1 min-h-0">
@@ -360,6 +402,11 @@ export default function Library() {
       {/* Import Result Modal */}
       {importResult && (
         <ImportResultModal result={importResult} onClose={() => setImportResult(null)} />
+      )}
+
+      {/* Project Settings Modal */}
+      {showProjectSettings && effectiveProjectId && (
+        <ProjectSettingsModal projectId={effectiveProjectId} onClose={() => setShowProjectSettings(false)} />
       )}
     </div>
   );
@@ -773,17 +820,32 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
                 </button>
                 {showCode && (
                   <div className="space-y-1.5">
-                    <div className="relative">
-                      <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 max-h-32 overflow-auto whitespace-pre-wrap">{recordedCode}</pre>
+                    <textarea
+                      value={recordedCode}
+                      onChange={e => setRecordedCode(e.target.value)}
+                      spellCheck={false}
+                      className="w-full text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 h-40 overflow-auto resize-y outline-none focus:border-emerald-500 transition"
+                    />
+                    <div className="flex gap-1.5">
+                      <button onClick={async () => {
+                        await fetch(`/library/scenarios/${s.id}/custom-spec`, {
+                          method: "PUT", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ customSpec: recordedCode }),
+                        });
+                        onRefresh();
+                        setLogs(prev => [...prev, "✅ Spec saved"]);
+                      }} className="flex-1 flex items-center justify-center gap-1 text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-1.5 rounded-lg transition">
+                        Save Spec
+                      </button>
+                      <button onClick={enrichWithAI} disabled={enriching || running || recording}
+                        className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 disabled:opacity-50 text-violet-400 py-1.5 rounded-lg transition">
+                        {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding...</> : "✨ AI Assertions"}
+                      </button>
                       <button onClick={deleteCustomSpec}
-                        className="absolute top-1.5 right-1.5 text-xs text-gray-600 hover:text-red-400 transition" title="Delete recorded spec">
+                        className="flex items-center justify-center text-xs text-gray-600 hover:text-red-400 px-2 py-1.5 rounded-lg transition" title="Delete spec">
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
-                    <button onClick={enrichWithAI} disabled={enriching || running || recording}
-                      className="w-full flex items-center justify-center gap-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 disabled:opacity-50 text-violet-400 py-1.5 rounded-lg transition">
-                      {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding assertions...</> : "✨ Add Assertions (AI)"}
-                    </button>
                   </div>
                 )}
               </div>

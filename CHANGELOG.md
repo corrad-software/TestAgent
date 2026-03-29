@@ -5,6 +5,9 @@ All notable changes to TestAgent are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Test Reports page** — browse all runs across project with pass/fail filter, search, expandable logs, report links
+- **Custom spec editor** — edit recorded Playwright code directly in the detail modal (textarea), save changes, delete
+- **Project runs API** — `GET /library/projects/:id/runs` returns all run records with scenario/module info
 - **Negative testing** — forms template now includes empty submission validation test + invalid email format test (auto-skip if no required fields/email fields)
 - **AI assertion enrichment** — "Add Assertions (AI)" button on recorded specs: Haiku analyzes code and injects expect() checks (one-time ~$0.001 per call, cached)
 - **AI failure explainer** endpoint — POST /library/scenarios/:id/explain-failure returns plain-language explanation of what went wrong

@@ -1,9 +1,13 @@
 // ─── Typed API client ─────────────────────────────────────────────────────────
 
+export interface ProjectMember {
+  id: string; name: string; email: string; role: string; avatarUrl: string | null;
+}
 export interface Project {
   id: string; name: string; description?: string;
   createdAt: string; updatedAt: string;
   modules: Module[];
+  members?: ProjectMember[];
 }
 export interface Module {
   id: string; projectId: string; name: string; description?: string;
@@ -95,17 +99,45 @@ export const getStats = (projectId?: string) =>
 
 export interface DailyStatsDay { date: string; totalRuns: number; passCount: number; failCount: number; passRate: number }
 export interface DailyStats { days: DailyStatsDay[] }
+export interface ProjectRun {
+  runId: string; scenarioId: string; scenarioName: string; moduleName: string;
+  testCaseId?: string; runAt: string; passed: boolean; summary: string;
+  reportId?: string; durationMs: number; logs?: string;
+}
+export const getProjectRuns = (projectId: string) =>
+  fetch(`/library/projects/${projectId}/runs`).then(r => json<ProjectRun[]>(r));
+
 export const getDailyStats = (projectId?: string) =>
   fetch(projectId ? `/library/projects/${projectId}/daily-stats` : "/library/daily-stats").then(r => json<DailyStats>(r));
 
 // Auth
-export interface AuthUser { id: string; email: string; name: string; role: string }
+export interface AuthUser { id: string; email: string; name: string; role: string; avatarUrl?: string | null }
 export const getMe        = () => fetch("/auth/me").then(r => r.ok ? r.json() as Promise<AuthUser> : Promise.reject());
 export const login        = (email: string, password: string) =>
   fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then(r => json<AuthUser>(r));
 export const logout       = () => fetch("/auth/logout", { method: "POST" }).then(r => r.json());
 export const changePassword = (currentPassword: string, newPassword: string) =>
   fetch("/auth/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) }).then(r => json<{ ok: boolean }>(r));
+
+// User Management (admin)
+export interface SystemUser {
+  id: string; email: string; name: string; role: string; avatarUrl: string | null;
+  createdAt: string; updatedAt: string;
+  projects: { projectId: string; projectName: string; role: string }[];
+}
+export const getUsers = () => fetch("/users").then(r => json<SystemUser[]>(r));
+export const createUser = (data: { email: string; name: string; password: string; role?: string; avatarUrl?: string }) =>
+  fetch("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<SystemUser>(r));
+export const updateUser = (id: string, data: { name?: string; email?: string; role?: string; avatarUrl?: string }) =>
+  fetch(`/users/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<SystemUser>(r));
+export const deleteUser = (id: string) =>
+  fetch(`/users/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
+export const resetUserPassword = (id: string, password: string) =>
+  fetch(`/users/${id}/password`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) }).then(r => json<{ ok: boolean }>(r));
+export const assignUserToProject = (userId: string, projectId: string, role?: string) =>
+  fetch(`/users/${userId}/assign`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId, role }) }).then(r => json<Member>(r));
+export const unassignUserFromProject = (userId: string, projectId: string) =>
+  fetch(`/users/${userId}/assign/${projectId}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
 
 // App Settings
 export interface AppSettings {
@@ -119,6 +151,7 @@ export interface AppSettings {
   defaultBaseUrl: string;
   reportRetentionDays: number;
   screenshotOnFailOnly: boolean;
+  aiBudget: number;
   webhookUrl: string;
   webhookOnPass: boolean;
   webhookOnFail: boolean;

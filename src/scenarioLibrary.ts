@@ -38,7 +38,7 @@ export interface Member {
   role: string; avatarUrl?: string; createdAt: string;
 }
 export type ModuleWithScenarios = Module & { scenarios: Scenario[] };
-export type ProjectWithModules  = Project & { modules: ModuleWithScenarios[] };
+export type ProjectWithModules  = Project & { modules: ModuleWithScenarios[]; members?: { id: string; name: string; email: string; role: string; avatarUrl: string | null }[] };
 
 // ─── Row mappers ──────────────────────────────────────────────────────────────
 
@@ -88,12 +88,16 @@ function mapMember(m: any): Member {
 export async function getProjectTree(): Promise<ProjectWithModules[]> {
   const projects = await prisma.project.findMany({
     orderBy: { createdAt: "asc" },
-    include: { modules: { orderBy: { createdAt: "asc" },
-      include: { scenarios: { orderBy: { createdAt: "asc" } } } } },
+    include: {
+      modules: { orderBy: { createdAt: "asc" },
+        include: { scenarios: { orderBy: { createdAt: "asc" } } } },
+      members: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, email: true, role: true, avatarUrl: true } },
+    },
   });
   return projects.map(p => ({
     ...mapProject(p),
     modules: p.modules.map(m => ({ ...mapModule(m), scenarios: m.scenarios.map(mapScenario) })),
+    members: p.members,
   }));
 }
 
@@ -257,6 +261,44 @@ export async function getDashboardStats(projectId?: string): Promise<DashboardSt
     passRate: totalRuns ? Math.round(passCount / totalRuns * 100) : 0,
     runsThisWeek, moduleBreakdown, recentRuns,
   };
+}
+
+// ─── Project Runs (all runs for report history) ─────────────────────────────
+
+export interface ProjectRun {
+  runId: string; scenarioId: string; scenarioName: string; moduleName: string;
+  testCaseId?: string; runAt: string; passed: boolean; summary: string;
+  reportId?: string; durationMs: number; logs?: string;
+}
+
+export async function getProjectRuns(projectId: string, limit = 200): Promise<ProjectRun[]> {
+  const modules = await prisma.module.findMany({
+    where: { projectId },
+    include: { scenarios: { select: { id: true } } },
+  });
+  const scenarioIds = modules.flatMap(m => m.scenarios.map(s => s.id));
+  if (!scenarioIds.length) return [];
+
+  const runs = await prisma.runRecord.findMany({
+    where: { scenarioId: { in: scenarioIds } },
+    orderBy: { runAt: "desc" },
+    take: limit,
+    include: { scenario: { include: { module: true } } },
+  });
+
+  return runs.map(r => ({
+    runId: r.id,
+    scenarioId: r.scenarioId,
+    scenarioName: r.scenario?.name ?? "(deleted)",
+    moduleName: r.scenario?.module?.name ?? "(deleted)",
+    testCaseId: (r.scenario as any)?.testCaseId ?? undefined,
+    runAt: r.runAt instanceof Date ? r.runAt.toISOString() : r.runAt,
+    passed: r.passed,
+    summary: r.summary,
+    reportId: r.reportId ?? undefined,
+    durationMs: r.durationMs,
+    logs: r.logs ?? undefined,
+  }));
 }
 
 // ─── Daily Stats (time-series) ───────────────────────────────────────────────

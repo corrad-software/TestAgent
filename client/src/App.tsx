@@ -1,15 +1,16 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import RunTest from "./pages/RunTest";
 import Projects from "./pages/Projects";
-import Library from "./pages/Library";
+import ProjectHub from "./pages/ProjectHub";
 import AppSettings from "./pages/AppSettings";
-import Dashboard from "./pages/Dashboard";
+import UserManagement from "./pages/UserManagement";
 import TechStack from "./pages/TechStack";
 import ApiExplorer from "./pages/ApiExplorer";
+import Reports from "./pages/Reports";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
@@ -33,12 +34,15 @@ function ProtectedRoutes() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Projects />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="library/:projectId" element={<Library />} />
+        <Route path="project/:projectId" element={<ProjectHub />} />
+        <Route path="library/:projectId" element={<LibraryRedirect />} />
+        <Route path="dashboard" element={<Navigate to="/" replace />} />
         <Route path="run" element={<RunTest />} />
+        <Route path="reports" element={<Reports />} />
         <Route path="app-settings" element={<AdminRoute><AppSettings /></AdminRoute>} />
-        <Route path="tech-stack" element={<TechStack />} />
-        <Route path="api-explorer" element={<ApiExplorer />} />
+        <Route path="users" element={<AdminRoute><UserManagement /></AdminRoute>} />
+        <Route path="tech-stack" element={<AdminRoute><TechStack /></AdminRoute>} />
+        <Route path="api-explorer" element={<AdminRoute><ApiExplorer /></AdminRoute>} />
       </Route>
     </Routes>
   );
@@ -57,6 +61,11 @@ export default function App() {
       </AuthProvider>
     </QueryClientProvider>
   );
+}
+
+function LibraryRedirect() {
+  const { projectId } = useParams();
+  return <Navigate to={`/project/${projectId}`} replace />;
 }
 
 // Redirect already-logged-in users away from /login
