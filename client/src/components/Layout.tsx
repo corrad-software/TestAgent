@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users } from "lucide-react";
+import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users, BookOpen, Info } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/AuthContext";
 import { getAppSettings } from "../lib/api";
@@ -47,8 +47,8 @@ export default function Layout() {
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 h-13 border-b border-gray-800">
-          <div className="w-6 h-6 rounded-md bg-emerald-500 flex items-center justify-center shrink-0">
-            <Bot className="w-3.5 h-3.5 text-white" />
+          <div className={`${collapsed ? "w-7 h-7" : "w-6 h-6"} rounded-md bg-emerald-500 flex items-center justify-center shrink-0`}>
+            <Bot className={`${collapsed ? "w-4 h-4" : "w-3.5 h-3.5"} text-white`} />
           </div>
           {!collapsed && (
             <span className="font-bold text-white text-sm tracking-wide flex-1 truncate">TestAgent</span>
@@ -58,7 +58,7 @@ export default function Layout() {
               onClick={() => setCollapsed(c => !c)}
               className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-800 text-white transition"
             >
-              {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+              {collapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-4 h-4" />}
             </button>
             {collapsed && (
               <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-md bg-white text-gray-900 text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover/toggle:opacity-100 transition-opacity z-50 shadow-lg">
@@ -75,10 +75,12 @@ export default function Layout() {
             { to: "/run",          icon: Play,              label: "Quick Run Test",   adminOnly: false },
             { to: "/reports",      icon: BarChart2,         label: "Test Reports",     adminOnly: false },
             { to: "/screenshots", icon: Image,             label: "Screenshots",      adminOnly: false },
+            { to: "/manual",       icon: BookOpen,           label: "User Manual",      adminOnly: false },
             { to: "/users",        icon: Users,              label: "Users",            adminOnly: true  },
             { to: "/app-settings", icon: SlidersHorizontal, label: "App Settings",     adminOnly: true  },
             { to: "/tech-stack",   icon: Layers,             label: "Tech Stack",       adminOnly: true  },
             { to: "/api-explorer", icon: Route,              label: "API Explorer",     adminOnly: true  },
+            { to: "/about",        icon: Info,               label: "About",            adminOnly: false },
           ].filter(item => !item.adminOnly || user?.role === "Admin")
           .map(({ to, icon: Icon, label }) => (
             <NavLink
@@ -92,7 +94,7 @@ export default function Layout() {
                  ${isActive ? "bg-emerald-500/10 text-emerald-400" : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"}`
               }
             >
-              <Icon className="w-4 h-4 shrink-0" />
+              <Icon className={`${collapsed ? "w-5 h-5" : "w-4 h-4"} shrink-0`} />
               {!collapsed && <span>{label}</span>}
               {collapsed && (
                 <span className="absolute left-full ml-2 px-2.5 py-1 rounded-md bg-gray-800 border border-gray-700 text-xs font-medium text-gray-200 whitespace-nowrap opacity-0 pointer-events-none group-hover/nav:opacity-100 transition-opacity z-50 shadow-lg">
@@ -204,9 +206,9 @@ export default function Layout() {
                 className="w-full flex items-center justify-center p-2 rounded-lg text-gray-500 hover:text-red-400 hover:bg-gray-800 transition"
               >
                 {user?.avatarUrl ? (
-                  <img src={user.avatarUrl} alt={user.name} className="w-6 h-6 rounded-full object-cover border border-gray-700" />
+                  <img src={user.avatarUrl} alt={user.name} className="w-8 h-8 rounded-full object-cover border border-gray-700" />
                 ) : (
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-5 h-5" />
                 )}
               </button>
               <span className="absolute left-full ml-2 bottom-0 px-2.5 py-1 rounded-md bg-gray-800 border border-gray-700 text-xs font-medium text-gray-200 whitespace-nowrap opacity-0 pointer-events-none group-hover/user:opacity-100 transition-opacity z-50 shadow-lg">
