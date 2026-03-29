@@ -11,6 +11,23 @@ import PageHeader from "../components/PageHeader";
 
 const ROLES = ["Admin", "Tester"];
 
+// 10 preset avatar SVGs as data URIs
+const mkAvatar = (bg: string, skin: string, hair: string, extra: string) =>
+  `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" rx="40" fill="${bg}"/><circle cx="40" cy="34" r="16" fill="${skin}"/>${hair}<circle cx="34" cy="31" r="2" fill="#333"/><circle cx="46" cy="31" r="2" fill="#333"/><path d="M36 38q4 3 8 0" stroke="#333" stroke-width="1.5" fill="none" stroke-linecap="round"/><ellipse cx="40" cy="62" rx="18" ry="14" fill="${skin}"/>${extra}</svg>`)}`;
+
+const PRESET_AVATARS = [
+  mkAvatar("#6366f1", "#f5d0a9", '<path d="M24 28q4-14 32 0" fill="#4338ca"/>', ''),
+  mkAvatar("#10b981", "#c68642", '<path d="M24 30q0-16 32 0v4H24z" fill="#333"/>', ''),
+  mkAvatar("#f59e0b", "#ffe0bd", '<path d="M22 26q6-12 36 0" fill="#92400e"/><rect x="30" y="27" width="20" height="5" rx="2" fill="#92400e" opacity=".3"/>', ''),
+  mkAvatar("#ec4899", "#f5d0a9", '<path d="M24 34q-2-18 16-18t16 18" fill="#7c2d12"/>', ''),
+  mkAvatar("#8b5cf6", "#ffe0bd", '<ellipse cx="40" cy="22" rx="14" ry="8" fill="#1e1b4b"/>', ''),
+  mkAvatar("#06b6d4", "#c68642", '<path d="M26 30q0-14 28 0" fill="#164e63"/><path d="M26 30h28" stroke="#164e63" stroke-width="2"/>', ''),
+  mkAvatar("#ef4444", "#f5d0a9", '<path d="M24 28q4-10 16-10t16 10" fill="#dc2626"/>', '<circle cx="40" cy="48" r="3" fill="#fbbf24"/>'),
+  mkAvatar("#14b8a6", "#ffe0bd", '<path d="M24 32q2-16 16-14t16 14" fill="#0f766e"/>', ''),
+  mkAvatar("#f97316", "#c68642", '<path d="M22 30q6-16 36 0" fill="#1a1a2e"/><path d="M22 30h36" stroke="#1a1a2e" stroke-width="2"/>', ''),
+  mkAvatar("#a855f7", "#f5d0a9", '<path d="M26 34q-4-20 14-18t14 18" fill="#581c87"/><path d="M24 34h32" stroke="#581c87" stroke-width="1.5"/>', ''),
+];
+
 const inputCls =
   "w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition";
 
@@ -231,18 +248,13 @@ function UserFormModal({ user, onClose, onSuccess }: {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState(user?.role ?? "Tester");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
-  const [avatarPreview, setAvatarPreview] = useState(user?.avatarUrl ?? "");
   const [error, setError] = useState("");
 
   function handleAvatarFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => {
-      const dataUrl = ev.target?.result as string;
-      setAvatarUrl(dataUrl);
-      setAvatarPreview(dataUrl);
-    };
+    reader.onload = ev => setAvatarUrl(ev.target?.result as string);
     reader.readAsDataURL(file);
   }
 
@@ -263,36 +275,39 @@ function UserFormModal({ user, onClose, onSuccess }: {
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={e => { e.preventDefault(); mut.mutate(); }} className="px-6 py-5 space-y-4">
-          {/* Avatar */}
-          <div className="space-y-1.5">
+          {/* Avatar picker */}
+          <div className="space-y-2">
             <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Avatar</label>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-gray-700 bg-gray-800 flex items-center justify-center shrink-0">
-                {avatarPreview
-                  ? <img src={avatarPreview} alt="preview" className="w-full h-full object-cover" />
-                  : <span className="text-base font-bold text-gray-500">
-                      {name ? name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "?"}
-                    </span>
-                }
-              </div>
-              <div className="flex-1 space-y-1.5">
-                <label className="flex items-center gap-1.5 cursor-pointer text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg transition w-fit">
-                  <Upload className="w-3.5 h-3.5" /> Upload
-                  <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
-                </label>
-                <input
-                  type="url" placeholder="...or paste image URL"
-                  value={avatarUrl.startsWith("data:") ? "" : avatarUrl}
-                  onChange={e => { setAvatarUrl(e.target.value); setAvatarPreview(e.target.value); }}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition"
-                />
-              </div>
-              {avatarPreview && (
-                <button type="button" onClick={() => { setAvatarUrl(""); setAvatarPreview(""); }}
-                  className="text-gray-600 hover:text-red-400 transition shrink-0" title="Remove avatar">
-                  <X className="w-4 h-4" />
+            <div className="flex flex-wrap gap-2">
+              {/* No avatar option */}
+              <button type="button" onClick={() => setAvatarUrl("")}
+                className={`w-10 h-10 rounded-full border-2 flex items-center justify-center transition ${
+                  !avatarUrl ? "border-emerald-500 ring-2 ring-emerald-500/30" : "border-gray-700 hover:border-gray-500"
+                } bg-gray-800`}>
+                <span className="text-xs text-gray-500 font-bold">
+                  {name ? name[0]?.toUpperCase() : "?"}
+                </span>
+              </button>
+              {/* Preset avatars */}
+              {PRESET_AVATARS.map((src, i) => (
+                <button type="button" key={i} onClick={() => setAvatarUrl(src)}
+                  className={`w-10 h-10 rounded-full border-2 overflow-hidden transition ${
+                    avatarUrl === src ? "border-emerald-500 ring-2 ring-emerald-500/30" : "border-gray-700 hover:border-gray-500"
+                  }`}>
+                  <img src={src} alt={`Avatar ${i + 1}`} className="w-full h-full" />
                 </button>
-              )}
+              ))}
+              {/* Upload custom */}
+              <label className={`w-10 h-10 rounded-full border-2 border-dashed flex items-center justify-center cursor-pointer transition ${
+                avatarUrl && !PRESET_AVATARS.includes(avatarUrl) && avatarUrl !== "" ? "border-emerald-500 ring-2 ring-emerald-500/30" : "border-gray-600 hover:border-gray-400"
+              } bg-gray-800 overflow-hidden`}>
+                {avatarUrl && !PRESET_AVATARS.includes(avatarUrl) && avatarUrl !== "" ? (
+                  <img src={avatarUrl} alt="Custom" className="w-full h-full object-cover" />
+                ) : (
+                  <Upload className="w-3.5 h-3.5 text-gray-500" />
+                )}
+                <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
+              </label>
             </div>
           </div>
           <div className="space-y-1.5">

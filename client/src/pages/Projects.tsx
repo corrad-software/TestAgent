@@ -2,8 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  Plus, FolderOpen, Layers, FlaskConical,
-  Clock, Upload, CheckCircle2,
+  Plus, FolderOpen, Layers, FlaskConical, Clock,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime } from "../lib/utils";
@@ -30,25 +29,9 @@ export default function Projects() {
     },
   });
 
-  // ── Import DSSB ──────────────────────────────────────────────────────────
-  const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
-
-  async function handleImport(files: FileList | File[]) {
-    const arr = Array.from(files);
-    const result = await api.importScenarios(arr);
-    setImportResult(result);
-    if (result.created > 0) qc.invalidateQueries({ queryKey: ["projects"] });
-  }
-
   return (
     <div className="flex flex-col h-screen">
       <PageHeader title="Projects" subtitle="Select a project to manage scenarios">
-        <label className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-medium px-3 py-2 rounded-lg transition cursor-pointer">
-          <Upload className="w-3.5 h-3.5" />
-          Import Test Script
-          <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden"
-            onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
-        </label>
         <button onClick={() => setShowCreate(true)}
           className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
           <Plus className="w-4 h-4" /> New Project
@@ -186,50 +169,6 @@ export default function Projects() {
               </button>
               <button onClick={() => { setShowCreate(false); setNewName(""); setNewDesc(""); }}
                 className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Import Result Modal */}
-      {importResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
-              <h2 className="text-sm font-semibold text-white">Import Result</h2>
-              <button onClick={() => setImportResult(null)} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
-            </div>
-            <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4 text-sm">
-              {importResult.created > 0 && (
-                <div className="flex items-start gap-3 bg-green-900/20 border border-green-800/50 rounded-lg px-4 py-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-green-300 font-semibold">{importResult.created} scenario{importResult.created !== 1 ? "s" : ""} imported</p>
-                    <ul className="mt-1 space-y-0.5 text-xs text-green-700 max-h-40 overflow-y-auto">
-                      {importResult.createdNames.map(n => <li key={n}>&#10003; {n}</li>)}
-                    </ul>
-                  </div>
-                </div>
-              )}
-              {importResult.errors.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-red-400 uppercase tracking-widest mb-2">{importResult.errors.length} skipped</p>
-                  <ul className="space-y-1 text-xs border border-gray-800 rounded-lg px-3 py-2 max-h-40 overflow-y-auto">
-                    {importResult.errors.map((e, i) => (
-                      <li key={i} className="flex items-start gap-2 text-gray-400">
-                        <span className="text-red-500 flex-shrink-0">{e.row > 0 ? `Row ${e.row}:` : "Error:"}</span>
-                        <span>{e.error}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {importResult.created === 0 && !importResult.errors.length && (
-                <p className="text-gray-500">No test cases found. Make sure the file is in DSSB or standard template format.</p>
-              )}
-            </div>
-            <div className="px-6 py-4 border-t border-gray-800 flex-shrink-0">
-              <button onClick={() => setImportResult(null)} className="w-full bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold py-2 rounded-lg transition">Done</button>
             </div>
           </div>
         </div>
