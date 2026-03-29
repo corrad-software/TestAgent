@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Settings2, BarChart2, Users, Plus, Pencil, Trash2,
-  CheckCircle2, TrendingUp, Activity, Calendar, ShieldCheck, X, Upload,
+  CheckCircle2, TrendingUp, Activity, Calendar, ShieldCheck, X,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime, ROLE_COLORS, roleColorCls, PROJECT_ROLE_PALETTE } from "../lib/utils";
@@ -25,7 +25,7 @@ export default function Settings() {
   return (
     <div className="flex flex-col h-screen">
       {/* Topbar */}
-      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
+      <header className="sticky top-0 z-10 bg-gray-950/80 backdrop-blur border-b border-gray-800 px-6 h-13 flex items-center justify-between shrink-0">
         <div>
           <h1 className="text-base font-semibold text-white">Project Settings</h1>
           <p className="text-xs text-gray-500 mt-0.5">Configure projects, view stats, and manage your team</p>
@@ -63,7 +63,7 @@ export default function Settings() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto p-6">
         {tab === "info"      && activeProject && <ProjectInfoTab project={activeProject} />}
         {tab === "dashboard" && activeProjectId && <DashboardTab projectId={activeProjectId} />}
         {tab === "team"      && activeProjectId && <TeamTab projectId={activeProjectId} />}
@@ -80,7 +80,7 @@ export default function Settings() {
 const ROLE_PALETTE = PROJECT_ROLE_PALETTE;
 
 // ─── Project Info Tab ─────────────────────────────────────────────────────────
-function ProjectInfoTab({ project }: { project: api.Project }) {
+export function ProjectInfoTab({ project }: { project: api.Project }) {
   const qc = useQueryClient();
   const [name, setName] = useState(project.name);
   const [desc, setDesc] = useState(project.description ?? "");
@@ -94,7 +94,7 @@ function ProjectInfoTab({ project }: { project: api.Project }) {
   });
 
   return (
-    <div className="max-w-lg space-y-6">
+    <div className="space-y-6">
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
         <h2 className="text-sm font-semibold text-white">Project Information</h2>
         <div className="space-y-1.5">
@@ -393,7 +393,7 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
         </div>
-        <div className="border-b border-gray-800 px-6 flex gap-1 shrink-0">
+        <div className="border-b border-gray-800 px-6 pt-2 flex gap-1 shrink-0">
           {([
             { id: "info" as const, icon: Settings2, label: "Info & Roles" },
             { id: "team" as const, icon: Users,     label: "Team Members" },
@@ -414,66 +414,125 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
   );
 }
 
-function TeamTab({ projectId }: { projectId: string }) {
+export function TeamTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
-  const [showModal, setShowModal] = useState(false);
-  const [editing,   setEditing]   = useState<api.Member | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", role: "Tester", avatarUrl: "" });
-  const [avatarPreview, setAvatarPreview] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [search, setSearch] = useState("");
+  const [addRole, setAddRole] = useState("Tester");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editRole, setEditRole] = useState("");
 
   const { data: members = [] } = useQuery({
     queryKey: ["members", projectId],
     queryFn: () => api.getMembers(projectId),
   });
 
-  const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ["members", projectId] }), [qc, projectId]);
-
-  const saveMut = useMutation({
-    mutationFn: () => editing
-      ? api.updateMember(editing.id, { ...form, avatarUrl: form.avatarUrl || undefined })
-      : api.createMember(projectId, { ...form, avatarUrl: form.avatarUrl || undefined }),
-    onSuccess: () => { invalidate(); setShowModal(false); },
+  const { data: users = [] } = useQuery({
+    queryKey: ["users"],
+    queryFn: api.getUsers,
+    enabled: showAdd,
   });
+
+  const invalidate = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["members", projectId] });
+    qc.invalidateQueries({ queryKey: ["projects"] });
+    qc.invalidateQueries({ queryKey: ["users"] });
+  }, [qc, projectId]);
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.deleteMember(id),
     onSuccess: invalidate,
   });
 
-  function openAdd() {
-    setEditing(null);
-    setForm({ name: "", email: "", role: "Tester", avatarUrl: "" });
-    setAvatarPreview("");
-    setShowModal(true);
-  }
-  function openEdit(m: api.Member) {
-    setEditing(m);
-    setForm({ name: m.name, email: m.email, role: m.role, avatarUrl: m.avatarUrl ?? "" });
-    setAvatarPreview(m.avatarUrl ?? "");
-    setShowModal(true);
-  }
+  const updateRoleMut = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) => api.updateMember(id, { role }),
+    onSuccess: () => { setEditingId(null); invalidate(); },
+  });
 
-  function handleAvatarFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const dataUrl = ev.target?.result as string;
-      setForm(f => ({ ...f, avatarUrl: dataUrl }));
-      setAvatarPreview(dataUrl);
-    };
-    reader.readAsDataURL(file);
-  }
+  const assignMut = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string }) =>
+      api.assignUserToProject(userId, projectId, role),
+    onSuccess: () => { setSearch(""); invalidate(); },
+  });
+
+  // Filter users not already in project
+  const memberEmails = new Set(members.map(m => m.email));
+  const availableUsers = users.filter(u => !memberEmails.has(u.email));
+  const searchResults = search.length >= 1
+    ? availableUsers.filter(u => {
+        const q = search.toLowerCase();
+        return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+      }).slice(0, 6)
+    : [];
 
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">Team Members</h2>
-        <button onClick={openAdd} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-3 py-2 rounded-lg transition">
-          <Plus className="w-4 h-4" /> Add Member
+        <button onClick={() => setShowAdd(a => !a)}
+          className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+          <Plus className="w-3.5 h-3.5" /> Add Member
         </button>
       </div>
 
+      {/* Add member — user search */}
+      {showAdd && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+          <p className="text-xs text-gray-500">Search existing users to add to this project</p>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Type a name or email..."
+                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition"
+                autoFocus
+              />
+            </div>
+            <select value={addRole} onChange={e => setAddRole(e.target.value)}
+              className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-emerald-500 transition">
+              <option>Admin</option>
+              <option>Tester</option>
+              <option>Viewer</option>
+            </select>
+          </div>
+          {/* Search results */}
+          {search.length >= 1 && (
+            <div className="space-y-1">
+              {searchResults.length === 0 ? (
+                <p className="text-xs text-gray-600 py-2 text-center italic">No matching users found</p>
+              ) : (
+                searchResults.map(u => (
+                  <div key={u.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-800/50 transition">
+                    {u.avatarUrl ? (
+                      <img src={u.avatarUrl} alt={u.name} className="w-8 h-8 rounded-full object-cover border border-gray-700 shrink-0" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-emerald-900/60 border border-emerald-700/40 flex items-center justify-center shrink-0">
+                        <span className="text-xs font-bold text-emerald-300">
+                          {u.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-200 truncate">{u.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                    </div>
+                    <button
+                      onClick={() => assignMut.mutate({ userId: u.id, role: addRole })}
+                      disabled={assignMut.isPending}
+                      className="text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-medium px-3 py-1.5 rounded-lg transition disabled:opacity-50 shrink-0"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Members table */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         {!members.length ? (
           <div className="px-6 py-10 text-center text-xs text-gray-600 italic">No team members yet</div>
@@ -499,17 +558,33 @@ function TeamTab({ projectId }: { projectId: string }) {
                   </td>
                   <td className="px-4 py-3 text-gray-400">{m.email}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${ROLE_COLORS[m.role] ?? "bg-gray-800 text-gray-400"}`}>{m.role}</span>
+                    {editingId === m.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <select value={editRole} onChange={e => setEditRole(e.target.value)}
+                          className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-emerald-500">
+                          <option>Admin</option>
+                          <option>Tester</option>
+                          <option>Viewer</option>
+                        </select>
+                        <button onClick={() => updateRoleMut.mutate({ id: m.id, role: editRole })}
+                          className="text-xs text-emerald-400 hover:text-emerald-300">Save</button>
+                        <button onClick={() => setEditingId(null)}
+                          className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+                      </div>
+                    ) : (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${ROLE_COLORS[m.role] ?? "bg-gray-800 text-gray-400"}`}>{m.role}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{relativeTime(m.createdAt)}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition">
-                      <button onClick={() => openEdit(m)} className="p-1.5 rounded hover:bg-gray-700 text-gray-400 transition">
+                      <button onClick={() => { setEditingId(m.id); setEditRole(m.role); }} className="p-1.5 rounded hover:bg-gray-700 text-gray-400 transition" title="Change role">
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => { if (confirm(`Remove "${m.name}"?`)) deleteMut.mutate(m.id); }}
+                        onClick={() => { if (confirm(`Remove "${m.name}" from this project?`)) deleteMut.mutate(m.id); }}
                         className="p-1.5 rounded hover:bg-red-900/50 text-gray-500 hover:text-red-400 transition"
+                        title="Remove from project"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -521,90 +596,6 @@ function TeamTab({ projectId }: { projectId: string }) {
           </table>
         )}
       </div>
-
-      {/* Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-              <h3 className="text-sm font-semibold text-white">{editing ? "Edit Member" : "Add Team Member"}</h3>
-              <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-200 transition text-lg leading-none">×</button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-
-              {/* Avatar picker */}
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Avatar</label>
-                <div className="flex items-center gap-4">
-                  {/* Preview */}
-                  <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-gray-700 shrink-0 bg-gray-800 flex items-center justify-center">
-                    {avatarPreview
-                      ? <img src={avatarPreview} alt="preview" className="w-full h-full object-cover" />
-                      : <span className="text-lg font-bold text-gray-500">
-                          {form.name ? form.name.split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase() : "?"}
-                        </span>
-                    }
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    {/* Upload */}
-                    <label className="flex items-center gap-2 cursor-pointer text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg transition w-fit">
-                      <Upload className="w-3.5 h-3.5" /> Upload image
-                      <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
-                    </label>
-                    {/* URL input */}
-                    <input
-                      type="url" placeholder="…or paste image URL"
-                      value={form.avatarUrl.startsWith("data:") ? "" : form.avatarUrl}
-                      onChange={e => { setForm(f => ({ ...f, avatarUrl: e.target.value })); setAvatarPreview(e.target.value); }}
-                      className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition"
-                    />
-                  </div>
-                  {avatarPreview && (
-                    <button onClick={() => { setForm(f => ({ ...f, avatarUrl: "" })); setAvatarPreview(""); }}
-                      className="text-gray-600 hover:text-red-400 transition shrink-0" title="Remove avatar">
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {[
-                { label: "Name",  key: "name",  type: "text",  placeholder: "Alice Smith" },
-                { label: "Email", key: "email", type: "email", placeholder: "alice@example.com" },
-              ].map(({ label, key, type, placeholder }) => (
-                <div key={key} className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">{label}</label>
-                  <input
-                    type={type} placeholder={placeholder}
-                    value={(form as any)[key]}
-                    onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition"
-                  />
-                </div>
-              ))}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Role</label>
-                <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-emerald-500 transition">
-                  <option>Admin</option>
-                  <option>Tester</option>
-                  <option>Viewer</option>
-                </select>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-800 flex gap-3">
-              <button
-                onClick={() => saveMut.mutate()}
-                disabled={saveMut.isPending || !form.name || !form.email}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition"
-              >
-                {saveMut.isPending ? "Saving…" : "Save"}
-              </button>
-              <button onClick={() => setShowModal(false)} className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

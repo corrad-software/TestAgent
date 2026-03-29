@@ -2,13 +2,12 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  Plus, FolderOpen, Layers, FlaskConical, Pencil, Trash2,
-  Clock, Upload, CheckCircle2, Settings2,
+  Plus, FolderOpen, Layers, FlaskConical,
+  Clock, Upload, CheckCircle2,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime } from "../lib/utils";
 import PageHeader from "../components/PageHeader";
-import { ProjectSettingsModal } from "./Settings";
 
 export default function Projects() {
   const qc = useQueryClient();
@@ -31,37 +30,14 @@ export default function Projects() {
     },
   });
 
-  // ── Edit project ─────────────────────────────────────────────────────────────
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editDesc, setEditDesc] = useState("");
-
-  const updateMut = useMutation({
-    mutationFn: () => api.updateProject(editingId!, { name: editName.trim(), description: editDesc.trim() || undefined }),
-    onSuccess: () => {
-      setEditingId(null);
-      qc.invalidateQueries({ queryKey: ["projects"] });
-    },
-  });
-
-  const deleteMut = useMutation({
-    mutationFn: api.deleteProject,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
-  });
-
   // ── Import DSSB ──────────────────────────────────────────────────────────
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
-  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
 
   async function handleImport(files: FileList | File[]) {
     const arr = Array.from(files);
     const result = await api.importScenarios(arr);
     setImportResult(result);
     if (result.created > 0) qc.invalidateQueries({ queryKey: ["projects"] });
-  }
-
-  function startEdit(p: api.Project) {
-    setEditingId(p.id); setEditName(p.name); setEditDesc(p.description ?? "");
   }
 
   return (
@@ -74,7 +50,7 @@ export default function Projects() {
             onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
         </label>
         <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition">
+          className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
           <Plus className="w-4 h-4" /> New Project
         </button>
       </PageHeader>
@@ -103,51 +79,26 @@ export default function Projects() {
               const moduleCount = p.modules?.length ?? 0;
               const scenarioCount = p.modules?.reduce((sum, m) => sum + (m.scenarios?.length ?? 0), 0) ?? 0;
 
+              const members = p.members ?? [];
+
               return (
                 <div
                   key={p.id}
-                  onClick={() => navigate(`/library/${p.id}`)}
+                  onClick={() => navigate(`/project/${p.id}`)}
                   className="group bg-gray-900 border border-gray-800 hover:border-emerald-500/50 rounded-xl p-5 flex flex-col gap-3 cursor-pointer transition hover:shadow-lg hover:shadow-emerald-500/5"
                 >
                   {/* Title row */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
-                        <FolderOpen className="w-4.5 h-4.5 text-emerald-400" />
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-gray-200 truncate group-hover:text-emerald-300 transition">
-                          {p.name}
-                        </h3>
-                        {p.description && (
-                          <p className="text-xs text-gray-600 truncate mt-0.5">{p.description}</p>
-                        )}
-                      </div>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
+                      <FolderOpen className="w-4.5 h-4.5 text-emerald-400" />
                     </div>
-                    {/* Actions */}
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0"
-                      onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => setSettingsProjectId(p.id)}
-                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition"
-                        title="Project settings"
-                      >
-                        <Settings2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => startEdit(p)}
-                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition"
-                        title="Edit project"
-                      >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => { if (confirm(`Delete project "${p.name}" and all its modules/scenarios?`)) deleteMut.mutate(p.id); }}
-                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-red-900/50 text-gray-500 hover:text-red-400 transition"
-                        title="Delete project"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-gray-200 truncate group-hover:text-emerald-300 transition">
+                        {p.name}
+                      </h3>
+                      {p.description && (
+                        <p className="text-xs text-gray-600 truncate mt-0.5">{p.description}</p>
+                      )}
                     </div>
                   </div>
 
@@ -163,10 +114,37 @@ export default function Projects() {
                     </span>
                   </div>
 
-                  {/* Updated */}
-                  <div className="flex items-center gap-1.5 text-xs text-gray-700 mt-auto pt-2 border-t border-gray-800/50">
-                    <Clock className="w-3 h-3" />
-                    Updated {relativeTime(p.updatedAt)}
+                  {/* Collaborators + Updated */}
+                  <div className="flex items-center justify-between mt-auto pt-2 border-t border-gray-800/50">
+                    {/* Avatar stack */}
+                    {members.length > 0 ? (
+                      <div className="flex items-center">
+                        <div className="flex -space-x-2">
+                          {members.slice(0, 5).map(m => (
+                            m.avatarUrl ? (
+                              <img key={m.id} src={m.avatarUrl} alt={m.name} title={m.name}
+                                className="w-6 h-6 rounded-full border-2 border-gray-900 object-cover" />
+                            ) : (
+                              <div key={m.id} title={m.name}
+                                className="w-6 h-6 rounded-full border-2 border-gray-900 bg-emerald-900/60 flex items-center justify-center">
+                                <span className="text-[9px] font-bold text-emerald-300">
+                                  {m.name[0]?.toUpperCase()}
+                                </span>
+                              </div>
+                            )
+                          ))}
+                        </div>
+                        {members.length > 5 && (
+                          <span className="text-[10px] text-gray-500 ml-1.5">+{members.length - 5}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-gray-700 italic">No members</span>
+                    )}
+                    <div className="flex items-center gap-1.5 text-[10px] text-gray-700 shrink-0">
+                      <Clock className="w-3 h-3" />
+                      {relativeTime(p.updatedAt)}
+                    </div>
                   </div>
                 </div>
               );
@@ -207,42 +185,6 @@ export default function Projects() {
                 {createMut.isPending ? "Creating…" : "Create Project"}
               </button>
               <button onClick={() => { setShowCreate(false); setNewName(""); setNewDesc(""); }}
-                className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Project Modal */}
-      {editingId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-              <h2 className="text-sm font-semibold text-white">Edit Project</h2>
-              <button onClick={() => setEditingId(null)}
-                className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">×</button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Project Name</label>
-                <input value={editName} onChange={e => setEditName(e.target.value)} autoFocus
-                  onKeyDown={e => { if (e.key === "Enter" && editName.trim()) updateMut.mutate(); if (e.key === "Escape") setEditingId(null); }}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-              </div>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                  Description <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>
-                </label>
-                <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows={2}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition resize-none" />
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-800 flex gap-3">
-              <button onClick={() => updateMut.mutate()} disabled={!editName.trim() || updateMut.isPending}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition">
-                {updateMut.isPending ? "Saving…" : "Save Changes"}
-              </button>
-              <button onClick={() => setEditingId(null)}
                 className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">Cancel</button>
             </div>
           </div>
@@ -293,10 +235,6 @@ export default function Projects() {
         </div>
       )}
 
-      {/* Project Settings Modal */}
-      {settingsProjectId && (
-        <ProjectSettingsModal projectId={settingsProjectId} onClose={() => setSettingsProjectId(null)} />
-      )}
     </div>
   );
 }

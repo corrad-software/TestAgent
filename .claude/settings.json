@@ -12,7 +12,24 @@
       "Bash(curl -s -b /tmp/ta_cookie http://localhost:4000/library/projects)",
       "Bash(node -e \":*)",
       "Bash(ls prisma/data/ prisma/*.db)",
-      "Bash(ls client/postcss* client/tailwind* client/eslint*)"
+      "Bash(ls client/postcss* client/tailwind* client/eslint*)",
+      "Bash(kill 27056)",
+      "Bash(cat:*)",
+      "Bash(find /Users/macbook/Documents/TestAgent -name prisma.schema -o -name schema.prisma -o -name .env* -type f)",
+      "Bash(npx vitest:*)",
+      "Bash(DATABASE_URL=\"file:/tmp/test-check.db\" npx prisma db push --skip-generate --accept-data-loss)",
+      "Bash(npm test:*)",
+      "Bash(grep -r \"Dashboard\\\\|getStats\\\\|moduleBreakdown\\\\|passRate\" /Users/macbook/Documents/TestAgent/client/src/ --include=*.ts --include=*.tsx)",
+      "Bash(find /Users/macbook/Documents/TestAgent/node_modules -name *codegen* -o -name *recorder*)",
+      "Bash(grep -v node_modules/.*node_modules)",
+      "Bash(find /Users/macbook/Documents/TestAgent/node_modules -type f \\\\\\(-name *codegen* -o -name *recorder* \\\\\\))",
+      "Bash(grep -r \"balance\\\\|usage\\\\|credit\" /Users/macbook/Documents/TestAgent/src --include=*.ts)",
+      "Bash(node -e \"import\\(''mermaid''\\).then\\(m => console.log\\(''mermaid OK'', typeof m.default\\)\\).catch\\(e => console.error\\(''FAIL'', e.message\\)\\)\")",
+      "Bash(git checkout:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(lsof -ti:4000,5173)",
+      "Bash(curl -s http://localhost:4000/app-settings)",
+      "Bash(lsof -ti:5174)"
     ]
   }
 }

@@ -16,6 +16,8 @@ export interface AppSettings {
   // Reports
   reportRetentionDays: number;
   screenshotOnFailOnly: boolean;
+  // Budget
+  aiBudget: number;           // max spend in USD, 0 = unlimited
   // Notifications
   webhookUrl: string;
   webhookOnPass: boolean;
@@ -32,6 +34,7 @@ const DEFAULTS: AppSettings = {
   defaultBaseUrl: "",
   reportRetentionDays: 30,
   screenshotOnFailOnly: false,
+  aiBudget: 4.65,
   webhookUrl: "",
   webhookOnPass: false,
   webhookOnFail: true,
