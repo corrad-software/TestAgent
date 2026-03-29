@@ -556,10 +556,11 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
         } else { send(data); }
       };
       await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, useCustomSpec ? customSpec : undefined);
+      const userName = (req as any).user?.email ?? (req as any).user?.name ?? "unknown";
       await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
                            passed: lastPassed, summary: lastSummary,
                            reportId: lastReportId, durationMs: Date.now() - startedAt,
-                           logs: runLogs.join("\n") });
+                           logs: runLogs.join("\n"), runBy: userName });
       if (bufferedResult) send(bufferedResult);
     }
   } catch (err) {

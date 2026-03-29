@@ -28,7 +28,7 @@ export interface Scenario {
 }
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
-  summary: string; reportId?: string; durationMs: number; logs?: string;
+  summary: string; reportId?: string; durationMs: number; logs?: string; runBy?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
@@ -102,7 +102,7 @@ export interface DailyStats { days: DailyStatsDay[] }
 export interface ProjectRun {
   runId: string; scenarioId: string; scenarioName: string; moduleName: string;
   testCaseId?: string; runAt: string; passed: boolean; summary: string;
-  reportId?: string; durationMs: number; logs?: string;
+  reportId?: string; durationMs: number; logs?: string; runBy?: string;
 }
 export const getProjectRuns = (projectId: string) =>
   fetch(`/library/projects/${projectId}/runs`).then(r => json<ProjectRun[]>(r));

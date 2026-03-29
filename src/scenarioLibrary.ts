@@ -31,7 +31,7 @@ export interface Scenario {
 }
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
-  summary: string; reportId?: string; durationMs: number; logs?: string;
+  summary: string; reportId?: string; durationMs: number; logs?: string; runBy?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
@@ -75,7 +75,7 @@ function mapRun(r: any): RunRecord {
            runAt: r.runAt instanceof Date ? r.runAt.toISOString() : r.runAt,
            passed: r.passed, summary: r.summary,
            reportId: r.reportId ?? undefined, durationMs: r.durationMs,
-           logs: r.logs ?? undefined };
+           logs: r.logs ?? undefined, runBy: r.runBy ?? undefined };
 }
 function mapMember(m: any): Member {
   return { id: m.id, projectId: m.projectId, name: m.name, email: m.email,
@@ -171,7 +171,7 @@ export async function addRunRecord(record: Omit<RunRecord, "id">): Promise<RunRe
       scenarioId: record.scenarioId, passed: record.passed,
       summary: record.summary, reportId: record.reportId,
       durationMs: record.durationMs, runAt: new Date(record.runAt),
-      logs: record.logs ?? null,
+      logs: record.logs ?? null, runBy: record.runBy ?? null,
     },
   });
   // Prune oldest beyond limit
@@ -268,7 +268,7 @@ export async function getDashboardStats(projectId?: string): Promise<DashboardSt
 export interface ProjectRun {
   runId: string; scenarioId: string; scenarioName: string; moduleName: string;
   testCaseId?: string; runAt: string; passed: boolean; summary: string;
-  reportId?: string; durationMs: number; logs?: string;
+  reportId?: string; durationMs: number; logs?: string; runBy?: string;
 }
 
 export async function getProjectRuns(projectId: string, limit = 200): Promise<ProjectRun[]> {
@@ -298,6 +298,7 @@ export async function getProjectRuns(projectId: string, limit = 200): Promise<Pr
     reportId: r.reportId ?? undefined,
     durationMs: r.durationMs,
     logs: r.logs ?? undefined,
+    runBy: r.runBy ?? undefined,
   }));
 }
 
