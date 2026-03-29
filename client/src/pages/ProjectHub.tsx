@@ -9,7 +9,7 @@ import * as api from "../lib/api";
 import { relativeTime } from "../lib/utils";
 import { ProjectDashboardContent } from "./Dashboard";
 import { LibraryContent } from "./Library";
-import { ProjectInfoTab, TeamTab } from "./Settings";
+import { ProjectInfoTab, TeamTab, EnvironmentsTab } from "./Settings";
 
 type Tab = "modules" | "dashboard" | "settings";
 
@@ -117,6 +117,9 @@ function SettingsContent({ project, projectId }: { project: api.Project; project
 
       {/* ── Right Column ── */}
       <div className="space-y-6">
+        {/* Environments */}
+        <EnvironmentsTab projectId={projectId} />
+
         {/* Team Members */}
         <TeamTab projectId={projectId} />
 

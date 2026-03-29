@@ -417,7 +417,7 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
 }
 
 // ─── Environments Tab ────────────────────────────────────────────────────────
-function EnvironmentsTab({ projectId }: { projectId: string }) {
+export function EnvironmentsTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
