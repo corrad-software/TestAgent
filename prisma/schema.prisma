@@ -13,9 +13,24 @@ model Project {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  modules Module[]
-  members Member[]
-  roles   ProjectRole[]
+  modules      Module[]
+  members      Member[]
+  roles        ProjectRole[]
+  environments Environment[]
+}
+
+model Environment {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  baseUrl   String
+  authConfig String?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
 }
 
 model Member {

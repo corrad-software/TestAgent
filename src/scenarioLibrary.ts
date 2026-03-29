@@ -375,3 +375,48 @@ export async function updateRole(id: string, data: Partial<Pick<ProjectRole, "na
 export async function deleteRole(id: string): Promise<void> {
   await prisma.projectRole.delete({ where: { id } });
 }
+
+// ─── Environments ────────────────────────────────────────────────────────────
+
+export interface Environment {
+  id: string; projectId: string; name: string; baseUrl: string;
+  authConfig?: { loginUrl: string; email: string; password: string };
+  isDefault: boolean; createdAt: string;
+}
+
+function mapEnv(e: any): Environment {
+  return {
+    id: e.id, projectId: e.projectId, name: e.name, baseUrl: e.baseUrl,
+    authConfig: e.authConfig ? JSON.parse(e.authConfig) : undefined,
+    isDefault: e.isDefault,
+    createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : e.createdAt,
+  };
+}
+
+export async function getEnvironments(projectId: string): Promise<Environment[]> {
+  const rows = await prisma.environment.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
+  return rows.map(mapEnv);
+}
+export async function createEnvironment(data: { projectId: string; name: string; baseUrl: string; authConfig?: { loginUrl: string; email: string; password: string }; isDefault?: boolean }): Promise<Environment> {
+  // If setting as default, unset other defaults
+  if (data.isDefault) {
+    await prisma.environment.updateMany({ where: { projectId: data.projectId, isDefault: true }, data: { isDefault: false } });
+  }
+  const e = await prisma.environment.create({
+    data: { projectId: data.projectId, name: data.name, baseUrl: data.baseUrl, authConfig: data.authConfig ? JSON.stringify(data.authConfig) : null, isDefault: data.isDefault ?? false },
+  });
+  return mapEnv(e);
+}
+export async function updateEnvironment(id: string, data: Partial<Pick<Environment, "name" | "baseUrl" | "isDefault"> & { authConfig?: { loginUrl: string; email: string; password: string } | null }>): Promise<Environment> {
+  const update: any = { ...data };
+  if (data.authConfig !== undefined) update.authConfig = data.authConfig ? JSON.stringify(data.authConfig) : null;
+  if (data.isDefault) {
+    const env = await prisma.environment.findUnique({ where: { id } });
+    if (env) await prisma.environment.updateMany({ where: { projectId: env.projectId, isDefault: true }, data: { isDefault: false } });
+  }
+  const e = await prisma.environment.update({ where: { id }, data: update });
+  return mapEnv(e);
+}
+export async function deleteEnvironment(id: string): Promise<void> {
+  await prisma.environment.delete({ where: { id } });
+}

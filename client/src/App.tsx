@@ -11,6 +11,7 @@ import UserManagement from "./pages/UserManagement";
 import TechStack from "./pages/TechStack";
 import ApiExplorer from "./pages/ApiExplorer";
 import Reports from "./pages/Reports";
+import Screenshots from "./pages/Screenshots";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, retry: 1 } },
@@ -39,6 +40,7 @@ function ProtectedRoutes() {
         <Route path="dashboard" element={<Navigate to="/" replace />} />
         <Route path="run" element={<RunTest />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="screenshots" element={<Screenshots />} />
         <Route path="app-settings" element={<AdminRoute><AppSettings /></AdminRoute>} />
         <Route path="users" element={<AdminRoute><UserManagement /></AdminRoute>} />
         <Route path="tech-stack" element={<AdminRoute><TechStack /></AdminRoute>} />

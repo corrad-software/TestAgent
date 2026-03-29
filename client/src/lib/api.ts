@@ -93,6 +93,20 @@ export const updateMember = (id: string, data: Partial<Pick<Member, "name" | "em
 export const deleteMember = (id: string) =>
   fetch(`/library/members/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
 
+// Environments
+export interface Environment {
+  id: string; projectId: string; name: string; baseUrl: string;
+  authConfig?: { loginUrl: string; email: string; password: string };
+  isDefault: boolean; createdAt: string;
+}
+export const getEnvironments = (projectId: string) => fetch(`/library/projects/${projectId}/environments`).then(r => json<Environment[]>(r));
+export const createEnvironment = (projectId: string, data: { name: string; baseUrl: string; authConfig?: { loginUrl: string; email: string; password: string }; isDefault?: boolean }) =>
+  fetch(`/library/projects/${projectId}/environments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<Environment>(r));
+export const updateEnvironment = (id: string, data: Partial<Pick<Environment, "name" | "baseUrl" | "isDefault"> & { authConfig?: { loginUrl: string; email: string; password: string } | null }>) =>
+  fetch(`/library/environments/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<Environment>(r));
+export const deleteEnvironment = (id: string) =>
+  fetch(`/library/environments/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
+
 // Stats
 export const getStats = (projectId?: string) =>
   fetch(projectId ? `/library/projects/${projectId}/stats` : "/library/stats").then(r => json<DashboardStats>(r));

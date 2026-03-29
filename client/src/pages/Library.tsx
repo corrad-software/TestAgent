@@ -383,6 +383,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
       {selectedScenario && (
         <ScenarioDetailModal
           scenario={selectedScenario}
+          projectId={effectiveProjectId}
           onEdit={() => {
             setSelectedScenario(null);
             setEditingScenario(selectedScenario);
@@ -487,8 +488,9 @@ function ScenarioRow({ scenario: s, onSelect }: {
 }
 
 // ─── Scenario Detail / Run Modal ─────────────────────────────────────────────
-function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh }: {
+function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose, onRefresh }: {
   scenario: api.Scenario;
+  projectId: string;
   onEdit: () => void;
   onDelete: () => void;
   onClose: () => void;
@@ -504,7 +506,14 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
   const [showCode, setShowCode]         = useState(false);
   const [enriching, setEnriching]       = useState(false);
   const [logTab, setLogTab]             = useState<"live" | "history">("live");
+  const [selectedEnvId, setSelectedEnvId] = useState<string>("");
   const logRef = useRef<HTMLDivElement>(null);
+
+  const { data: environments = [] } = useQuery({
+    queryKey: ["environments", projectId],
+    queryFn: () => api.getEnvironments(projectId),
+    enabled: !!projectId,
+  });
 
   const { data: history } = useQuery({
     queryKey: ["history", s.id],
@@ -534,7 +543,7 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
     try {
       const res = await fetch(`/library/scenarios/${s.id}/run`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headed, useCustomSpec: useRecorded && !!recordedCode }),
+        body: JSON.stringify({ headed, useCustomSpec: useRecorded && !!recordedCode, environmentId: selectedEnvId || undefined }),
       });
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
@@ -773,6 +782,20 @@ function ScenarioDetailModal({ scenario: s, onEdit, onDelete, onClose, onRefresh
 
             {/* Spacer */}
             <div className="flex-1" />
+
+            {/* Environment selector */}
+            {environments.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">Environment</p>
+                <select value={selectedEnvId} onChange={e => setSelectedEnvId(e.target.value)}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
+                  <option value="">Default (scenario URL)</option>
+                  {environments.map(env => (
+                    <option key={env.id} value={env.id}>{env.name} — {env.baseUrl}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Spec toggle */}
             {recordedCode && (

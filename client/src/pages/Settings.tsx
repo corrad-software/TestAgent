@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Settings2, BarChart2, Users, Plus, Pencil, Trash2,
+  Settings2, BarChart2, Users, Plus, Pencil, Trash2, Globe,
   CheckCircle2, TrendingUp, Activity, Calendar, ShieldCheck, X,
 } from "lucide-react";
 import * as api from "../lib/api";
@@ -380,7 +380,7 @@ export { MemberAvatar };
 
 // ─── Project Settings Modal (used from Projects page) ───────────────────────
 export function ProjectSettingsModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
-  const [tab, setTab] = useState<"info" | "team">("info");
+  const [tab, setTab] = useState<"info" | "team" | "envs">("info");
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: api.getProjects });
   const project = projects.find(p => p.id === projectId);
 
@@ -397,6 +397,7 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
           {([
             { id: "info" as const, icon: Settings2, label: "Info & Roles" },
             { id: "team" as const, icon: Users,     label: "Team Members" },
+            { id: "envs" as const, icon: Globe,     label: "Environments" },
           ]).map(({ id, icon: Icon, label }) => (
             <button key={id} onClick={() => setTab(id)}
               className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition
@@ -408,8 +409,135 @@ export function ProjectSettingsModal({ projectId, onClose }: { projectId: string
         <div className="flex-1 overflow-y-auto p-6">
           {tab === "info" && project && <ProjectInfoTab project={project} />}
           {tab === "team" && <TeamTab projectId={projectId} />}
+          {tab === "envs" && <EnvironmentsTab projectId={projectId} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Environments Tab ────────────────────────────────────────────────────────
+function EnvironmentsTab({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [loginUrl, setLoginUrl] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isDefault, setIsDefault] = useState(false);
+
+  const { data: envs = [] } = useQuery({
+    queryKey: ["environments", projectId],
+    queryFn: () => api.getEnvironments(projectId),
+  });
+  const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ["environments", projectId] }), [qc, projectId]);
+
+  const saveMut = useMutation({
+    mutationFn: () => {
+      const authConfig = loginUrl && email && password ? { loginUrl, email, password } : undefined;
+      return editId
+        ? api.updateEnvironment(editId, { name: name.trim(), baseUrl: baseUrl.trim(), isDefault, authConfig: authConfig ?? null })
+        : api.createEnvironment(projectId, { name: name.trim(), baseUrl: baseUrl.trim(), isDefault, authConfig });
+    },
+    onSuccess: () => { resetForm(); invalidate(); },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.deleteEnvironment(id),
+    onSuccess: invalidate,
+  });
+
+  function resetForm() {
+    setShowForm(false); setEditId(null);
+    setName(""); setBaseUrl(""); setLoginUrl(""); setEmail(""); setPassword(""); setIsDefault(false);
+  }
+  function startEdit(env: api.Environment) {
+    setEditId(env.id); setName(env.name); setBaseUrl(env.baseUrl);
+    setLoginUrl(env.authConfig?.loginUrl ?? ""); setEmail(env.authConfig?.email ?? ""); setPassword(env.authConfig?.password ?? "");
+    setIsDefault(env.isDefault); setShowForm(true);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Environments</h2>
+          <p className="text-xs text-gray-600 mt-0.5">Define different base URLs for staging, production, etc.</p>
+        </div>
+        <button onClick={() => { resetForm(); setShowForm(true); }}
+          className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+          <Plus className="w-3.5 h-3.5" /> Add Environment
+        </button>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Name</label>
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Staging"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Base URL</label>
+              <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://stg.example.com"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <input value={loginUrl} onChange={e => setLoginUrl(e.target.value)} placeholder="Login URL (optional)"
+              className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email / Username"
+              className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+            <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Password"
+              className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={isDefault} onChange={e => setIsDefault(e.target.checked)}
+              className="accent-emerald-500" /> Set as default environment
+          </label>
+          <div className="flex gap-2">
+            <button onClick={() => saveMut.mutate()} disabled={!name.trim() || !baseUrl.trim() || saveMut.isPending}
+              className="text-xs bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-lg px-3 py-1.5 transition">
+              {saveMut.isPending ? "Saving…" : editId ? "Update" : "Create"}
+            </button>
+            <button onClick={resetForm} className="text-xs text-gray-500 hover:text-gray-300 transition">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {envs.length === 0 && !showForm ? (
+        <p className="text-xs text-gray-600 italic py-4">No environments configured. Tests will use the scenario's URL directly.</p>
+      ) : (
+        <div className="space-y-2">
+          {envs.map(env => (
+            <div key={env.id} className="bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 group">
+              <Globe className="w-4 h-4 text-gray-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-200 font-medium">{env.name}</span>
+                  {env.isDefault && <span className="text-[10px] bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded">Default</span>}
+                  {env.authConfig && <span className="text-[10px] text-gray-600">with credentials</span>}
+                </div>
+                <p className="text-xs text-gray-500 truncate">{env.baseUrl}</p>
+              </div>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                <button onClick={() => startEdit(env)} className="p-1.5 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition">
+                  <Pencil className="w-3 h-3" />
+                </button>
+                <button onClick={() => { if (confirm(`Delete "${env.name}"?`)) deleteMut.mutate(env.id); }}
+                  className="p-1.5 rounded hover:bg-red-900/50 text-gray-500 hover:text-red-400 transition">
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

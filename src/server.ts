@@ -41,6 +41,10 @@ import {
   createRole,
   updateRole,
   deleteRole,
+  getEnvironments,
+  createEnvironment,
+  updateEnvironment,
+  deleteEnvironment,
 } from "./scenarioLibrary";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -539,9 +543,28 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    const { url, description, authConfig, customSpec } = scenario;
+    let { url, description, authConfig, customSpec } = scenario;
     const headed: boolean = req.body?.headed === true;
     const useCustomSpec: boolean = req.body?.useCustomSpec === true && !!customSpec;
+
+    // Environment override
+    const envId: string | undefined = req.body?.environmentId;
+    if (envId) {
+      try {
+        const envRow = await prisma.environment.findUnique({ where: { id: envId } });
+        if (envRow) {
+          try {
+            const origHost = new URL(url).origin;
+            url = url.replace(origHost, envRow.baseUrl.replace(/\/$/, ""));
+          } catch { url = envRow.baseUrl; }
+          onLog(`🌍 Environment: ${envRow.name} → ${envRow.baseUrl}`);
+          if (envRow.authConfig) {
+            authConfig = JSON.parse(envRow.authConfig);
+            onLog(`🔐 Using ${envRow.name} credentials`);
+          }
+        }
+      } catch { /* ignore env lookup errors */ }
+    }
     const testTypes: TestType[] = scenario.testTypes?.length ? scenario.testTypes : ["smoke"];
 
     for (let i = 0; i < testTypes.length; i++) {
@@ -740,6 +763,24 @@ app.delete("/library/roles/:id", requireAdmin, async (req, res) => {
   catch (err) { res.status(400).json({ error: (err as Error).message }); }
 });
 
+// ─── Projects: Environments ─────────────────────────────────────────────────
+app.get("/library/projects/:id/environments", async (req, res) => {
+  try { res.json(await getEnvironments(req.params.id)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/projects/:id/environments", async (req, res) => {
+  try { res.json(await createEnvironment({ ...req.body, projectId: req.params.id })); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/environments/:id", async (req, res) => {
+  try { res.json(await updateEnvironment(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/environments/:id", async (req, res) => {
+  try { await deleteEnvironment(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
 // ─── Projects: Dashboard Stats ───────────────────────────────────────────────
 app.get("/library/projects/:id/stats", async (req, res) => {
   try { res.json(await getDashboardStats(req.params.id)); }
@@ -764,6 +805,62 @@ app.get("/library/projects/:id/runs", async (req, res) => {
   try { res.json(await getProjectRuns(req.params.id)); }
   catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
+
+// ─── Screenshots gallery ────────────────────────────────────────────────────
+app.get("/screenshots", async (_req, res) => {
+  const reportsDir = path.join(process.cwd(), "playwright-reports");
+  const testResultsDir = path.join(process.cwd(), "test-results");
+  const screenshots: { url: string; runId: string; testType: string; filename: string; createdAt: string }[] = [];
+
+  try {
+    // Scan playwright-reports for screenshots
+    const reportDirs = await fs.readdir(reportsDir).catch(() => [] as string[]);
+    for (const runId of reportDirs) {
+      const dataDir = path.join(reportsDir, runId, "data");
+      try {
+        const files = await fs.readdir(dataDir);
+        for (const file of files) {
+          if (file.endsWith(".png") || file.endsWith(".jpg")) {
+            const stat = await fs.stat(path.join(dataDir, file));
+            const parts = runId.split("-");
+            const testType = parts.slice(2).join("-") || "unknown";
+            screenshots.push({
+              url: `/playwright-report/${runId}/data/${file}`,
+              runId,
+              testType,
+              filename: file,
+              createdAt: stat.mtime.toISOString(),
+            });
+          }
+        }
+      } catch { /* skip dirs without data/ */ }
+    }
+
+    // Scan test-results for auth screenshots
+    try {
+      const trFiles = await fs.readdir(testResultsDir);
+      for (const file of trFiles) {
+        if (file.endsWith(".png") || file.endsWith(".jpg")) {
+          const stat = await fs.stat(path.join(testResultsDir, file));
+          screenshots.push({
+            url: `/test-results/${file}`,
+            runId: "test-results",
+            testType: file.includes("auth") ? "auth" : "test",
+            filename: file,
+            createdAt: stat.mtime.toISOString(),
+          });
+        }
+      }
+    } catch { /* no test-results dir */ }
+
+    screenshots.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json(screenshots);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+// Serve test-results static files
+app.use("/test-results", express.static(path.join(process.cwd(), "test-results")));
 
 // ─── Library: Import from Excel/CSV ──────────────────────────────────────────
 app.get("/library/import/template", (_req, res) => {

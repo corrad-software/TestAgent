@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Bot, Play, FolderOpen, BarChart2, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users } from "lucide-react";
+import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/AuthContext";
 import { getAppSettings } from "../lib/api";
@@ -74,6 +74,7 @@ export default function Layout() {
             { to: "/",             icon: FolderOpen,        label: "Projects",         adminOnly: false },
             { to: "/run",          icon: Play,              label: "Quick Run Test",   adminOnly: false },
             { to: "/reports",      icon: BarChart2,         label: "Test Reports",     adminOnly: false },
+            { to: "/screenshots", icon: Image,             label: "Screenshots",      adminOnly: false },
             { to: "/users",        icon: Users,              label: "Users",            adminOnly: true  },
             { to: "/app-settings", icon: SlidersHorizontal, label: "App Settings",     adminOnly: true  },
             { to: "/tech-stack",   icon: Layers,             label: "Tech Stack",       adminOnly: true  },
@@ -105,11 +106,42 @@ export default function Layout() {
         {/* AI Usage Meter */}
         <div className="border-t border-gray-800 px-3 py-3">
           {collapsed ? (
-            <div
-              className="flex items-center justify-center"
-              title={`Spent $${spent.toFixed(4)}${remaining !== null ? ` / $${budget.toFixed(2)} budget — $${remaining.toFixed(4)} left` : ""}${modelLabel ? ` | ${modelLabel}` : ""}`}
-            >
-              <Coins className={`w-4 h-4 ${spent > 0 ? "text-violet-400" : "text-gray-600"}`} />
+            <div className="relative group/meter flex items-center justify-center">
+              {/* Analog gauge */}
+              <svg width="36" height="22" viewBox="0 0 36 22" className="shrink-0">
+                {/* Background arc */}
+                <path
+                  d="M 4 20 A 14 14 0 0 1 32 20"
+                  fill="none"
+                  stroke="#374151"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
+                {/* Filled arc */}
+                <path
+                  d="M 4 20 A 14 14 0 0 1 32 20"
+                  fill="none"
+                  stroke={spentPct >= 100 ? "#ef4444" : spentPct > 80 ? "#f59e0b" : "#10b981"}
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeDasharray={`${(spentPct / 100) * 44} 44`}
+                />
+                {/* Needle */}
+                {(() => {
+                  const angle = Math.PI - (spentPct / 100) * Math.PI;
+                  const nx = 18 + Math.cos(angle) * 10;
+                  const ny = 20 - Math.sin(angle) * 10;
+                  return <line x1="18" y1="20" x2={nx} y2={ny} stroke="#e5e7eb" strokeWidth="1.5" strokeLinecap="round" />;
+                })()}
+                {/* Center dot */}
+                <circle cx="18" cy="20" r="1.5" fill="#e5e7eb" />
+              </svg>
+              {/* Tooltip */}
+              <span className="absolute left-full ml-2 px-2.5 py-1.5 rounded-md bg-white text-gray-900 text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover/meter:opacity-100 transition-opacity z-50 shadow-lg">
+                <span className="font-mono font-bold">${spent.toFixed(2)}</span>
+                {budget > 0 && <span className="text-gray-500"> / ${budget.toFixed(2)}</span>}
+                {modelLabel && <span className="text-gray-400 ml-1.5">· {modelLabel}</span>}
+              </span>
             </div>
           ) : (
             <div className="space-y-2.5">
