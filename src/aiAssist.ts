@@ -3,7 +3,9 @@ import fs from "fs";
 import path from "path";
 import { getAppSettings } from "./appSettings";
 
-const client = new Anthropic();
+function getClient() {
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+}
 
 // ─── Token usage tracking ────────────────────────────────────────────────────
 const USAGE_PATH = path.join(process.cwd(), "data", "ai-usage.json");
@@ -88,7 +90,7 @@ ${description ? `Context: ${description}` : ""}
 
 Add expect() assertions after key actions to verify the page behaves correctly. Return the complete modified code.`;
 
-  const response = await client.messages.create({
+  const response = await getClient().messages.create({
     model,
     max_tokens: 4096,
     system: ASSERTION_SYSTEM,
@@ -133,7 +135,7 @@ export async function explainFailure(
     .slice(0, 15)
     .join("\n");
 
-  const response = await client.messages.create({
+  const response = await getClient().messages.create({
     model,
     max_tokens: 500,
     system: "You explain test failures to beginners. Be concise, friendly, and practical in 3-5 sentences. Focus on what the user can fix.",

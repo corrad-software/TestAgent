@@ -77,9 +77,9 @@ AI features require an Anthropic API key. Without it, everything works except:
 
 To enable AI:
 1. Get a key from [console.anthropic.com](https://console.anthropic.com/settings/keys)
-2. Edit `.env` → set `ANTHROPIC_API_KEY=sk-ant-...`
-3. Restart the server
-4. Configure model in App Settings (Haiku is cheapest ~$0.001/call)
+2. Login to TestAgent → **App Settings** → paste your API key → **Save**
+3. Select your preferred model (Haiku is cheapest ~$0.001/call)
+4. No restart needed — works immediately
 
 ## Project Structure
 
