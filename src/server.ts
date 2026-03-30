@@ -12,6 +12,7 @@ import { getAppSettings, updateAppSettings, maskSettings } from "./appSettings";
 import { requireAuth, requireAdmin, hashPassword, verifyPassword, signToken, seedAdminIfNeeded, COOKIE_NAME, COOKIE_OPTS } from "./auth";
 import { prisma } from "./db";
 import { generateSpec, injectAuthIntoSpec } from "./specGenerator";
+import { stepsToPlaywrightSpec } from "./stepsToSpec";
 import { runPlaywrightTest } from "./testRunner";
 import { TestType } from "./testSuites";
 import type { TestReport } from "./reporter";
@@ -548,9 +549,10 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    let { url, description, authConfig, customSpec } = scenario;
+    let { url, description, authConfig, customSpec, testSteps } = scenario;
     const headed: boolean = req.body?.headed === true;
     const useCustomSpec: boolean = req.body?.useCustomSpec === true && !!customSpec;
+    const useTestSteps: boolean = req.body?.useTestSteps === true && !!testSteps?.length;
 
     // Environment override
     const envId: string | undefined = req.body?.environmentId;
@@ -583,7 +585,10 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
           bufferedResult = data;
         } else { send(data); }
       };
-      await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, useCustomSpec ? customSpec : undefined);
+      const specOverride = useTestSteps
+        ? stepsToPlaywrightSpec(testSteps!, scenario.name, url)
+        : useCustomSpec ? customSpec : undefined;
+      await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, specOverride);
       const userName = (req as any).user?.email ?? (req as any).user?.name ?? "unknown";
       await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
                            passed: lastPassed, summary: lastSummary,
@@ -615,11 +620,22 @@ app.post("/library/scenarios/:id/record", async (req, res) => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
     const specPath = path.join(specDir, `record-${timestamp}.spec.ts`);
 
+    // If scenario has auth config, start recording at login URL so user can log in first
+    let startUrl = scenario.url;
+    if (scenario.authConfig?.loginUrl) {
+      startUrl = scenario.authConfig.loginUrl;
+    }
+
     send({ type: "recordStart", message: "Opening browser with Playwright Recorder..." });
-    send({ type: "log", message: `🎬 Recording for: ${scenario.url}` });
+    if (startUrl !== scenario.url) {
+      send({ type: "log", message: `🔐 Opening login page: ${startUrl}` });
+      send({ type: "log", message: `After logging in, navigate to: ${scenario.url}` });
+    } else {
+      send({ type: "log", message: `🎬 Recording for: ${scenario.url}` });
+    }
     send({ type: "log", message: "Perform your actions in the browser. Close the browser when done." });
 
-    const args = ["playwright", "codegen", scenario.url, "-o", specPath, "--target", "playwright-test"];
+    const args = ["playwright", "codegen", startUrl, "-o", specPath, "--target", "playwright-test"];
     const proc = spawn("npx", args, {
       cwd: process.cwd(),
       env: { ...process.env, FORCE_COLOR: "0" },
@@ -736,6 +752,31 @@ app.delete("/library/scenarios/:id/custom-spec", async (req, res) => {
     await updateScenario(req.params.id, { customSpec: undefined } as any);
     res.json({ ok: true });
   } catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Save / Delete test steps ──────────────────────────────────────
+app.put("/library/scenarios/:id/test-steps", async (req, res) => {
+  try {
+    const s = await updateScenario(req.params.id, { testSteps: req.body.testSteps });
+    res.json(s);
+  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/scenarios/:id/test-steps", async (req, res) => {
+  try {
+    await updateScenario(req.params.id, { testSteps: undefined } as any);
+    res.json({ ok: true });
+  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Preview steps as Playwright code ──────────────────────────────
+app.post("/library/scenarios/:id/steps-preview", async (req, res) => {
+  try {
+    const scenario = await getScenario(req.params.id);
+    if (!scenario) { res.status(404).json({ error: "Not found" }); return; }
+    const steps = req.body.testSteps ?? scenario.testSteps ?? [];
+    const code = stepsToPlaywrightSpec(steps, scenario.name, scenario.url);
+    res.json({ code });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
 // ─── Projects: Members ───────────────────────────────────────────────────────

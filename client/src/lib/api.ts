@@ -17,13 +17,21 @@ export interface Module {
 export interface ProjectRole {
   id: string; projectId: string; name: string; color: string; createdAt: string;
 }
+export interface TestStep {
+  id: string;
+  action: "navigate" | "click" | "fill" | "select" | "check" | "uncheck" | "hover" | "wait" | "screenshot" | "assert_visible" | "assert_text" | "assert_url" | "custom";
+  target?: string;
+  input?: string;
+  expected?: string;
+  description?: string;
+}
 export interface Scenario {
   id: string; moduleId: string; assigneeId?: string; roleId?: string;
   testCaseId?: string; scenarioRefId?: string;
   name: string; url: string; testTypes: string[];
   description?: string; tags: string[];
   authConfig?: { loginUrl: string; email: string; password: string };
-  customSpec?: string;
+  customSpec?: string; testSteps?: TestStep[];
   createdAt: string; updatedAt: string;
 }
 export interface RunRecord {

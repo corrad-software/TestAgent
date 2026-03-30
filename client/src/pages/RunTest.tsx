@@ -114,14 +114,17 @@ export default function RunTest() {
     if (!url.trim()) return;
     setRecording(true);
     setLines([]);
+    // If auth is configured, start recording at the login URL so the user can log in first
+    const startUrl = loginUrl.trim() || url.trim();
     appendLine("🎬 Starting Playwright Codegen recorder…", "text-violet-400");
+    if (loginUrl.trim()) appendLine("🔐 Opening login page — log in first, then navigate to the target page.", "text-amber-400");
     appendLine("Perform actions in the browser, then close it to capture the script.", "text-gray-500");
 
     try {
       const res = await fetch("/run-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim(), record: true }),
+        body: JSON.stringify({ url: startUrl, record: true }),
       });
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
@@ -216,10 +219,13 @@ export default function RunTest() {
                   className="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-4 py-2 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
               </div>
               <button onClick={() => setHeaded(h => !h)}
+                title={headed
+                  ? "Visible Browser — opens a real browser window so you can watch the test run. Click to switch to headless."
+                  : "Headless — runs in background, faster and uses less resources. Click to switch to visible browser."}
                 className={`flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition shrink-0
                   ${headed ? "border-teal-500 text-teal-300 bg-teal-900/20" : "border-gray-700 text-gray-400 bg-gray-800"}`}>
                 <Monitor className="w-3.5 h-3.5" />
-                {headed ? "Headed" : "Headless"}
+                {headed ? "Visible Browser" : "Headless"}
               </button>
             </div>
 
@@ -291,7 +297,7 @@ export default function RunTest() {
             {/* Auth */}
             <details className="border-t border-gray-800 pt-3">
               <summary className="flex items-center gap-2 cursor-pointer select-none list-none text-xs font-semibold text-gray-500 uppercase tracking-widest w-fit hover:text-gray-300 transition">
-                Login Required
+                Login Required <span className="font-normal normal-case tracking-normal text-gray-600">— Record will start at Login URL</span>
               </summary>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 <input value={loginUrl} onChange={e => setLoginUrl(e.target.value)} type="url" placeholder="Login URL"

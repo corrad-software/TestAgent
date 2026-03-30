@@ -5,6 +5,7 @@ import {
   Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
   Layers, Inbox, FolderOpen, BarChart2, X, Loader,
   CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search, Settings,
+  ArrowRight, ArrowLeft, Code, ListOrdered,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
@@ -502,8 +503,11 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
   const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
   const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
-  const [useRecorded, setUseRecorded]   = useState(!!s.customSpec);
+  const [runMode, setRunMode]           = useState<"template" | "recorded" | "steps">(
+    s.testSteps?.length ? "steps" : s.customSpec ? "recorded" : "template"
+  );
   const [showCode, setShowCode]         = useState(false);
+  const [showSteps, setShowSteps]       = useState(false);
   const [enriching, setEnriching]       = useState(false);
   const [logTab, setLogTab]             = useState<"live" | "history">("live");
   const [selectedEnvId, setSelectedEnvId] = useState<string>("");
@@ -543,7 +547,12 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
     try {
       const res = await fetch(`/library/scenarios/${s.id}/run`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headed, useCustomSpec: useRecorded && !!recordedCode, environmentId: selectedEnvId || undefined }),
+        body: JSON.stringify({
+          headed,
+          useCustomSpec: runMode === "recorded" && !!recordedCode,
+          useTestSteps: runMode === "steps" && !!s.testSteps?.length,
+          environmentId: selectedEnvId || undefined,
+        }),
       });
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
@@ -610,7 +619,7 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ customSpec: ev.code }),
               });
-              setUseRecorded(true);
+              setRunMode("recorded");
               onRefresh();
             }
             if (ev.type === "recordEnd") {
@@ -630,7 +639,7 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
     if (!confirm("Delete the recorded spec? This cannot be undone.")) return;
     await fetch(`/library/scenarios/${s.id}/custom-spec`, { method: "DELETE" });
     setRecordedCode(null);
-    setUseRecorded(false);
+    setRunMode("template");
     setShowCode(false);
     onRefresh();
   }
@@ -797,30 +806,41 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
               </div>
             )}
 
-            {/* Spec toggle */}
-            {recordedCode && (
-              <div className="flex items-center gap-1 bg-gray-950 rounded-lg p-0.5">
-                <button onClick={() => setUseRecorded(false)}
-                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${!useRecorded ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
+            {/* Run mode toggle */}
+            {(recordedCode || (s.testSteps && s.testSteps.length > 0)) && (
+              <div className="flex items-center gap-0.5 bg-gray-950 rounded-lg p-0.5">
+                <button onClick={() => setRunMode("template")}
+                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "template" ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
                   Template
                 </button>
-                <button onClick={() => setUseRecorded(true)}
-                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${useRecorded ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
-                  Recorded
-                </button>
+                {s.testSteps && s.testSteps.length > 0 && (
+                  <button onClick={() => setRunMode("steps")}
+                    className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "steps" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
+                    Steps
+                  </button>
+                )}
+                {recordedCode && (
+                  <button onClick={() => setRunMode("recorded")}
+                    className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "recorded" ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
+                    Recorded
+                  </button>
+                )}
               </div>
             )}
 
             {/* Run buttons */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 relative group/run">
               <button onClick={() => run(false)} disabled={running || recording}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition">
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition"
+                title="Headless — runs in background, faster and uses less resources. Best for automated testing.">
                 {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Run{useRecorded && recordedCode ? " (Rec)" : ""}
+                Headless{runMode === "recorded" ? " (Rec)" : runMode === "steps" ? " (Steps)" : ""}
               </button>
-              <button onClick={() => run(true)} disabled={running || recording} title="Run with visible browser"
-                className="flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-3 py-2 rounded-lg transition">
+              <button onClick={() => run(true)} disabled={running || recording}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white py-2 rounded-lg transition"
+                title="Visible Browser — opens a real browser window so you can watch the test run. Useful for debugging and verifying test steps.">
                 <Monitor className="w-3.5 h-3.5" />
+                Visible{runMode === "recorded" ? " (Rec)" : runMode === "steps" ? " (Steps)" : ""}
               </button>
             </div>
 
@@ -869,6 +889,29 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Test steps viewer */}
+            {s.testSteps && s.testSteps.length > 0 && (
+              <div className="space-y-1.5">
+                <button onClick={() => setShowSteps(!showSteps)}
+                  className="text-xs text-gray-500 hover:text-gray-300 transition flex items-center gap-1">
+                  {showSteps ? "▾" : "▸"} Test Steps ({s.testSteps.length})
+                </button>
+                {showSteps && (
+                  <div className="space-y-1 bg-gray-950 border border-gray-800 rounded-lg p-2 max-h-40 overflow-y-auto">
+                    {s.testSteps.map((step, i) => (
+                      <div key={step.id} className="flex items-center gap-1.5 text-[11px]">
+                        <span className="text-gray-700 font-mono w-3 text-right shrink-0">{i + 1}</span>
+                        <span className="text-emerald-400 font-medium">{step.action}</span>
+                        {step.target && <span className="text-gray-500 font-mono truncate">{step.target}</span>}
+                        {step.input && <span className="text-gray-600 truncate">"{step.input}"</span>}
+                        {step.description && <span className="text-gray-700 italic truncate">— {step.description}</span>}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -987,7 +1030,223 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
   );
 }
 
-// ─── Scenario Modal ───────────────────────────────────────────────────────────
+// ─── Test Step Actions ────────────────────────────────────────────────────────
+const STEP_ACTIONS: { value: api.TestStep["action"]; label: string; icon: string }[] = [
+  { value: "navigate",       label: "Navigate",       icon: "🔗" },
+  { value: "click",          label: "Click",          icon: "👆" },
+  { value: "fill",           label: "Fill / Type",    icon: "✏️" },
+  { value: "select",         label: "Select Option",  icon: "📋" },
+  { value: "check",          label: "Check",          icon: "☑️" },
+  { value: "uncheck",        label: "Uncheck",        icon: "⬜" },
+  { value: "hover",          label: "Hover",          icon: "🖱️" },
+  { value: "wait",           label: "Wait",           icon: "⏳" },
+  { value: "screenshot",     label: "Screenshot",     icon: "📸" },
+  { value: "assert_visible", label: "Assert Visible", icon: "👁️" },
+  { value: "assert_text",    label: "Assert Text",    icon: "📝" },
+  { value: "assert_url",     label: "Assert URL",     icon: "🔍" },
+  { value: "custom",         label: "Custom Code",    icon: "💻" },
+];
+
+function makeStepId(): string {
+  return "s_" + Math.random().toString(36).slice(2, 9);
+}
+
+// ─── Test Steps Editor (dual-mode: table + code preview) ──────────────────────
+function TestStepsEditor({ steps, onChange, scenarioUrl }: {
+  steps: api.TestStep[];
+  onChange: (steps: api.TestStep[]) => void;
+  scenarioUrl: string;
+}) {
+  const [mode, setMode] = useState<"steps" | "code">("steps");
+  const [codePreview, setCodePreview] = useState("");
+
+  function addStep() {
+    onChange([...steps, { id: makeStepId(), action: "click", target: "", input: "", expected: "", description: "" }]);
+  }
+
+  function updateStep(id: string, patch: Partial<api.TestStep>) {
+    onChange(steps.map(s => s.id === id ? { ...s, ...patch } : s));
+  }
+
+  function removeStep(id: string) {
+    onChange(steps.filter(s => s.id !== id));
+  }
+
+  function moveStep(idx: number, dir: -1 | 1) {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= steps.length) return;
+    const copy = [...steps];
+    [copy[idx], copy[newIdx]] = [copy[newIdx], copy[idx]];
+    onChange(copy);
+  }
+
+  function duplicateStep(idx: number) {
+    const copy = [...steps];
+    copy.splice(idx + 1, 0, { ...steps[idx], id: makeStepId() });
+    onChange(copy);
+  }
+
+  // Generate code preview
+  useEffect(() => {
+    if (mode !== "code" || !steps.length) return;
+    // Client-side preview generation (mirrors server stepsToSpec logic)
+    const lines: string[] = [];
+    lines.push(`import { test, expect } from '@playwright/test';`);
+    lines.push(``);
+    lines.push(`test.describe('Test Steps', () => {`);
+    lines.push(`  test('execute test steps', async ({ page }) => {`);
+    lines.push(`    await page.goto(${JSON.stringify(scenarioUrl)});`);
+    lines.push(``);
+    for (const step of steps) {
+      const t = step.target || "";
+      const v = step.input || "";
+      const desc = step.description ? `    // ${step.description}\n` : "";
+      let code = "";
+      switch (step.action) {
+        case "navigate":    code = `    await page.goto(${JSON.stringify(v || t)});`; break;
+        case "click":       code = `    await page.locator(${JSON.stringify(t)}).click();`; break;
+        case "fill":        code = `    await page.locator(${JSON.stringify(t)}).fill(${JSON.stringify(v)});`; break;
+        case "select":      code = `    await page.locator(${JSON.stringify(t)}).selectOption(${JSON.stringify(v)});`; break;
+        case "check":       code = `    await page.locator(${JSON.stringify(t)}).check();`; break;
+        case "uncheck":     code = `    await page.locator(${JSON.stringify(t)}).uncheck();`; break;
+        case "hover":       code = `    await page.locator(${JSON.stringify(t)}).hover();`; break;
+        case "wait":        code = `    await page.waitForTimeout(${parseInt(v) || 1000});`; break;
+        case "screenshot":  code = `    await page.screenshot({ path: ${JSON.stringify(v || "test-results/step-screenshot.png")} });`; break;
+        case "assert_visible": code = `    await expect(page.locator(${JSON.stringify(t)})).toBeVisible();`; break;
+        case "assert_text": code = `    await expect(page.locator(${JSON.stringify(t)})).toContainText(${JSON.stringify(v)});`; break;
+        case "assert_url":  code = `    await expect(page).toHaveURL(${JSON.stringify(v || t)});`; break;
+        case "custom":      code = `    ${v || `// Custom step: ${step.description ?? "TODO"}`}`; break;
+        default:            code = `    // Unknown action: ${step.action}`;
+      }
+      lines.push(desc + code);
+    }
+    lines.push(``);
+    lines.push(`    await page.screenshot({ path: 'test-results/steps-final.png' });`);
+    lines.push(`  });`);
+    lines.push(`});`);
+    setCodePreview(lines.join("\n"));
+  }, [steps, mode, scenarioUrl]);
+
+  return (
+    <div className="space-y-3">
+      {/* Mode toggle */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5 bg-gray-950 rounded-lg p-0.5">
+          <button onClick={() => setMode("steps")}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition font-medium ${mode === "steps" ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
+            <ListOrdered className="w-3 h-3" /> Steps
+          </button>
+          <button onClick={() => setMode("code")}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition font-medium ${mode === "code" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
+            <Code className="w-3 h-3" /> Code Preview
+          </button>
+        </div>
+        <span className="text-[10px] text-gray-600 ml-auto">{steps.length} step{steps.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      {mode === "steps" ? (
+        <div className="space-y-2">
+          {/* Steps table */}
+          {steps.length === 0 ? (
+            <div className="text-center py-6 border border-dashed border-gray-800 rounded-lg">
+              <p className="text-xs text-gray-600 mb-2">No test steps yet</p>
+              <button onClick={addStep}
+                className="text-xs text-emerald-400 hover:text-emerald-300 transition font-medium">
+                + Add first step
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-1.5 max-h-[340px] overflow-y-auto pr-1">
+              {steps.map((step, idx) => (
+                <div key={step.id} className="group flex items-start gap-1.5 bg-gray-950 border border-gray-800 rounded-lg p-2 hover:border-gray-700 transition">
+                  {/* Step number + drag handle */}
+                  <div className="flex flex-col items-center gap-0.5 pt-1 shrink-0 w-6">
+                    <span className="text-[10px] text-gray-600 font-mono">{idx + 1}</span>
+                    <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition">
+                      <button onClick={() => moveStep(idx, -1)} disabled={idx === 0}
+                        className="text-gray-600 hover:text-gray-400 disabled:opacity-30 text-[10px]">▲</button>
+                      <button onClick={() => moveStep(idx, 1)} disabled={idx === steps.length - 1}
+                        className="text-gray-600 hover:text-gray-400 disabled:opacity-30 text-[10px]">▼</button>
+                    </div>
+                  </div>
+
+                  {/* Step content */}
+                  <div className="flex-1 grid grid-cols-12 gap-1.5 min-w-0">
+                    {/* Action dropdown */}
+                    <select value={step.action} onChange={e => updateStep(step.id, { action: e.target.value as api.TestStep["action"] })}
+                      className="col-span-3 bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
+                      {STEP_ACTIONS.map(a => <option key={a.value} value={a.value}>{a.icon} {a.label}</option>)}
+                    </select>
+
+                    {/* Target / Selector */}
+                    {!["navigate", "wait", "screenshot", "assert_url", "custom"].includes(step.action) && (
+                      <input value={step.target ?? ""} onChange={e => updateStep(step.id, { target: e.target.value })}
+                        placeholder="Selector (e.g. #email, button[type=submit])"
+                        className="col-span-4 bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 font-mono outline-none focus:border-emerald-500 transition" />
+                    )}
+
+                    {/* Input / Value */}
+                    {["fill", "select", "navigate", "wait", "screenshot", "assert_text", "assert_url", "custom"].includes(step.action) && (
+                      <input value={step.input ?? ""} onChange={e => updateStep(step.id, { input: e.target.value })}
+                        placeholder={step.action === "wait" ? "ms (e.g. 1000)" : step.action === "custom" ? "Playwright code" : step.action === "navigate" ? "URL" : "Value"}
+                        className={`${!["navigate", "wait", "screenshot", "assert_url", "custom"].includes(step.action) ? "col-span-3" : "col-span-7"} bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 ${step.action === "custom" ? "font-mono" : ""} outline-none focus:border-emerald-500 transition`} />
+                    )}
+
+                    {/* Expected (for assertions) */}
+                    {["assert_visible", "assert_text", "assert_url"].includes(step.action) && (
+                      <input value={step.expected ?? ""} onChange={e => updateStep(step.id, { expected: e.target.value })}
+                        placeholder="Expected result"
+                        className={`${step.action === "assert_visible" ? "col-span-7" : "col-span-2"} bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 outline-none focus:border-emerald-500 transition`} />
+                    )}
+
+                    {/* Spacer for actions without input/target */}
+                    {["click", "check", "uncheck", "hover"].includes(step.action) && (
+                      <div className="col-span-5" />
+                    )}
+
+                    {/* Description (inline, small) */}
+                    <input value={step.description ?? ""} onChange={e => updateStep(step.id, { description: e.target.value })}
+                      placeholder="Note..."
+                      className="col-span-12 bg-transparent border-none text-[11px] text-gray-600 placeholder-gray-800 outline-none px-2 py-0.5" />
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-col gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
+                    <button onClick={() => duplicateStep(idx)} title="Duplicate"
+                      className="text-gray-600 hover:text-gray-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800 transition">⧉</button>
+                    <button onClick={() => removeStep(step.id)} title="Remove"
+                      className="text-gray-600 hover:text-red-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800 transition">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add step button */}
+          {steps.length > 0 && (
+            <button onClick={addStep}
+              className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-gray-500 hover:text-emerald-400 border border-dashed border-gray-800 hover:border-emerald-500/30 rounded-lg py-2 transition">
+              <Plus className="w-3 h-3" /> Add Step
+            </button>
+          )}
+        </div>
+      ) : (
+        /* Code preview mode */
+        <div className="relative">
+          <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-3 max-h-[380px] overflow-auto whitespace-pre-wrap leading-relaxed">
+            {codePreview || "// Add test steps to see generated Playwright code"}
+          </pre>
+          <span className="absolute top-2 right-2 text-[10px] text-gray-700 bg-gray-900 px-1.5 py-0.5 rounded">Read-only preview</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Scenario Modal (Wizard) ──────────────────────────────────────────────────
+const WIZARD_STEPS = ["Basics", "Test Design", "Review"] as const;
+type WizardStep = (typeof WIZARD_STEPS)[number];
+
 const TEST_TYPES = [
   { value: "smoke",         label: "🔍 Smoke" },
   { value: "navigation",    label: "🔗 Navigation" },
@@ -1010,6 +1269,11 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
 }) {
   const projectModules = project.modules ?? [];
 
+  // Wizard state
+  const [wizardStep, setWizardStep] = useState<WizardStep>("Basics");
+  const wizardIdx = WIZARD_STEPS.indexOf(wizardStep);
+
+  // Form state
   const [moduleId,      setModuleId]      = useState(scenario?.moduleId ?? defaultModuleId);
   const [testCaseId,    setTestCaseId]    = useState(scenario?.testCaseId ?? "");
   const [scenarioRefId, setScenarioRefId] = useState(scenario?.scenarioRefId ?? "");
@@ -1025,11 +1289,14 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
   const [loginPass,   setLoginPass]   = useState(scenario?.authConfig?.password ?? "");
   const [savedAt,     setSavedAt]     = useState<number | null>(null);
 
+  // Test steps state
+  const [testSteps, setTestSteps] = useState<api.TestStep[]>(scenario?.testSteps ?? []);
+
   // Snapshot of last saved values for dirty tracking
   const [snapshot, setSnapshot] = useState(() => getFormValues());
 
   function getFormValues() {
-    return JSON.stringify({ moduleId, testCaseId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass });
+    return JSON.stringify({ moduleId, testCaseId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass, testSteps });
   }
 
   const isDirty = () => getFormValues() !== snapshot;
@@ -1052,6 +1319,19 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
   const toggleType = (t: string) =>
     setTestTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
+  function canProceed(): boolean {
+    if (wizardStep === "Basics") return !!(moduleId && name.trim() && url.trim());
+    if (wizardStep === "Test Design") return testTypes.length > 0;
+    return true;
+  }
+
+  function nextStep() {
+    if (wizardIdx < WIZARD_STEPS.length - 1) setWizardStep(WIZARD_STEPS[wizardIdx + 1]);
+  }
+  function prevStep() {
+    if (wizardIdx > 0) setWizardStep(WIZARD_STEPS[wizardIdx - 1]);
+  }
+
   async function submit() {
     if (!moduleId || !name.trim() || !url.trim() || !testTypes.length) {
       alert("Module, name, URL, and at least one test type are required."); return;
@@ -1064,6 +1344,7 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
       description: description.trim() || undefined,
       tags: tags.split(",").map(t => t.trim()).filter(Boolean),
       authConfig, assigneeId: assigneeId || undefined, roleId: roleId || undefined,
+      testSteps: testSteps.length > 0 ? testSteps : undefined,
     });
     if (ok) {
       setSavedAt(Date.now());
@@ -1071,167 +1352,319 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
     }
   }
 
+  const inputCls = "w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition";
+  const labelCls = "block text-xs font-semibold text-gray-400 uppercase tracking-widest";
+  const optSpan = <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Header with breadcrumb + back button */}
-        <div className="flex items-center justify-between px-6 py-3 border-b border-gray-800 shrink-0">
-          <div className="flex items-center gap-3">
-            {onBack && (
-              <button onClick={() => confirmAndClose(onBack)}
-                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-200 transition">
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            )}
-            <div>
-              <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-0.5">
-                <span>{project.name}</span>
-                <span className="text-gray-700">/</span>
-                <span>{projectModules.find(m => m.id === moduleId)?.name ?? "Select module"}</span>
+        {/* Header */}
+        <div className="shrink-0">
+          <div className="flex items-center justify-between px-6 py-3">
+            <div className="flex items-center gap-3">
+              {onBack && (
+                <button onClick={() => confirmAndClose(onBack)}
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-200 transition">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              )}
+              <div>
+                <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-0.5">
+                  <span>{project.name}</span>
+                  <span className="text-gray-700">/</span>
+                  <span>{projectModules.find(m => m.id === moduleId)?.name ?? "Select module"}</span>
+                </div>
+                <h2 className="text-sm font-semibold text-white">{scenario ? "Edit Scenario" : "New Scenario"}</h2>
               </div>
-              <h2 className="text-sm font-semibold text-white">{scenario ? "Edit Scenario" : "New Scenario"}</h2>
             </div>
+            <button onClick={() => confirmAndClose(onClose)} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
           </div>
-          <button onClick={() => confirmAndClose(onClose)} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
+
+          {/* Tab bar */}
+          <div className="flex border-b border-gray-800">
+            {WIZARD_STEPS.map((s, i) => {
+              const isActive = s === wizardStep;
+              const isCompleted = i < wizardIdx;
+              const isReachable = i <= wizardIdx || (i === wizardIdx + 1 && canProceed());
+              return (
+                <button key={s} onClick={() => { if (isReachable) setWizardStep(s); }}
+                  disabled={!isReachable}
+                  className={`relative flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider transition
+                    ${isActive
+                      ? "text-emerald-400"
+                      : isCompleted
+                        ? "text-gray-400 hover:text-gray-200 cursor-pointer"
+                        : isReachable
+                          ? "text-gray-500 hover:text-gray-300 cursor-pointer"
+                          : "text-gray-700 cursor-not-allowed"
+                    }`}>
+                  <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center font-bold border transition
+                    ${isActive
+                      ? "bg-emerald-500 text-white border-emerald-500"
+                      : isCompleted
+                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                        : "bg-gray-900 text-gray-600 border-gray-700"
+                    }`}>
+                    {isCompleted ? "✓" : i + 1}
+                  </span>
+                  {s}
+                  {/* Active indicator bar */}
+                  {isActive && (
+                    <span className="absolute bottom-0 left-4 right-4 h-0.5 bg-emerald-500 rounded-full" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Two-column body */}
+        {/* Body — changes based on wizard step */}
         <div className="overflow-y-auto flex-1 px-6 py-4">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
 
-            {/* ─── Left column ─── */}
-            {/* Module */}
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Module</label>
-              <select value={moduleId} onChange={e => setModuleId(e.target.value)}
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-emerald-500 transition">
-                <option value="">— select module —</option>
-                {projectModules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </div>
-
-            {/* URL */}
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">URL</label>
-              <input value={url} onChange={e => setUrl(e.target.value)} type="url" placeholder="https://example.com"
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-            </div>
-
-            {/* Kes ID */}
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                Kes ID <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>
-              </label>
-              <input value={testCaseId} onChange={e => setTestCaseId(e.target.value)}
-                placeholder="e.g. TC-NAS-PRF-01"
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition font-mono" />
-            </div>
-
-            {/* Scenario ID */}
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                Scenario ID <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>
-              </label>
-              <input value={scenarioRefId} onChange={e => setScenarioRefId(e.target.value)}
-                placeholder="e.g. SR-NAS-PRF-01"
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition font-mono" />
-            </div>
-
-            {/* Scenario Name — full width */}
-            <div className="col-span-2 space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Scenario Name</label>
-              <input value={name} onChange={e => setName(e.target.value)} autoFocus
-                placeholder="e.g. Login page smoke test"
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-            </div>
-
-            {/* Test types — full width */}
-            <div className="col-span-2 space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                Test Types <span className="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span>
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {TEST_TYPES.map(({ value, label }) => (
-                  <button key={value} type="button" onClick={() => toggleType(value)}
-                    className={`px-3 py-1 rounded-lg border text-xs font-medium transition select-none
-                      ${testTypes.includes(value)
-                        ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-                        : "border-gray-700 bg-gray-950 text-gray-400 hover:border-emerald-500/60"}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                Description <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>
-              </label>
-              <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
-                placeholder="What should the test focus on?"
-                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition resize-none" />
-            </div>
-
-            {/* Right: Tags, Role, Assignee stacked */}
-            <div className="space-y-3">
+          {/* ─── Step 1: Basics ─── */}
+          {wizardStep === "Basics" && (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               <div className="space-y-1">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                  Tags <span className="text-gray-600 font-normal normal-case tracking-normal">— comma separated</span>
-                </label>
-                <input value={tags} onChange={e => setTags(e.target.value)} placeholder="auth, critical, regression"
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">User Role</label>
-                <select value={roleId} onChange={e => setRoleId(e.target.value)}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-emerald-500 transition">
-                  <option value="">— no role —</option>
-                  {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                <label className={labelCls}>Module</label>
+                <select value={moduleId} onChange={e => setModuleId(e.target.value)} className={inputCls}>
+                  <option value="">— select module —</option>
+                  {projectModules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
               </div>
-              {members.length > 0 && (
+              <div className="space-y-1">
+                <label className={labelCls}>URL</label>
+                <input value={url} onChange={e => setUrl(e.target.value)} type="url" placeholder="https://example.com" className={inputCls} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>Kes ID {optSpan}</label>
+                <input value={testCaseId} onChange={e => setTestCaseId(e.target.value)} placeholder="e.g. TC-NAS-PRF-01" className={inputCls + " font-mono"} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>Scenario ID {optSpan}</label>
+                <input value={scenarioRefId} onChange={e => setScenarioRefId(e.target.value)} placeholder="e.g. SR-NAS-PRF-01" className={inputCls + " font-mono"} />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <label className={labelCls}>Scenario Name</label>
+                <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Login page smoke test" className={inputCls} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>Description {optSpan}</label>
+                <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
+                  placeholder="What should the test focus on?" className={inputCls + " resize-none"} />
+              </div>
+              <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest">Assignee</label>
-                  <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 outline-none focus:border-emerald-500 transition">
-                    <option value="">— unassigned —</option>
-                    {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
+                  <label className={labelCls}>Tags {optSpan}</label>
+                  <input value={tags} onChange={e => setTags(e.target.value)} placeholder="auth, critical, regression" className={inputCls} />
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>User Role</label>
+                  <select value={roleId} onChange={e => setRoleId(e.target.value)} className={inputCls}>
+                    <option value="">— no role —</option>
+                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
-              )}
-            </div>
-
-            {/* Auth — full width */}
-            <details className="col-span-2 border-t border-gray-800 pt-3">
-              <summary className="flex items-center gap-2 cursor-pointer select-none list-none text-xs font-semibold text-gray-500 uppercase tracking-widest hover:text-gray-300 transition w-fit">
-                Login Required
-              </summary>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                <input value={loginUrl} onChange={e => setLoginUrl(e.target.value)} type="url" placeholder="Login URL"
-                  className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-                <input value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="Email / Username"
-                  className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
-                <input value={loginPass} onChange={e => setLoginPass(e.target.value)} type="password" placeholder="Password"
-                  className="bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition" />
+                {members.length > 0 && (
+                  <div className="space-y-1">
+                    <label className={labelCls}>Assignee</label>
+                    <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className={inputCls}>
+                      <option value="">— unassigned —</option>
+                      {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
-            </details>
+              <div className="col-span-2 border-t border-gray-800 pt-3 space-y-1.5">
+                <label className={labelCls}>Login Required {optSpan}</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <input value={loginUrl} onChange={e => setLoginUrl(e.target.value)} type="url" placeholder="Login URL" className={inputCls} />
+                  <input value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="Email / Username" className={inputCls} />
+                  <input value={loginPass} onChange={e => setLoginPass(e.target.value)} type="password" placeholder="Password" className={inputCls} />
+                </div>
+              </div>
+            </div>
+          )}
 
-          </div>
+          {/* ─── Step 2: Test Design ─── */}
+          {wizardStep === "Test Design" && (
+            <div className="space-y-4">
+              {/* Test types */}
+              <div className="space-y-1.5">
+                <label className={labelCls}>
+                  Test Types <span className="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {TEST_TYPES.map(({ value, label }) => (
+                    <button key={value} type="button" onClick={() => toggleType(value)}
+                      className={`px-3 py-1 rounded-lg border text-xs font-medium transition select-none
+                        ${testTypes.includes(value)
+                          ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
+                          : "border-gray-700 bg-gray-950 text-gray-400 hover:border-emerald-500/60"}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="border-t border-gray-800 pt-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <ListOrdered className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-widest">Test Steps</h3>
+                  <span className="text-[10px] text-gray-600">— structured step-by-step actions (optional, Katalon-style)</span>
+                </div>
+                <TestStepsEditor steps={testSteps} onChange={setTestSteps} scenarioUrl={url || "https://example.com"} />
+              </div>
+            </div>
+          )}
+
+          {/* ─── Step 3: Review ─── */}
+          {wizardStep === "Review" && (
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Review Before Saving</h3>
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* Left: Details */}
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Module</p>
+                    <p className="text-sm text-gray-200">{projectModules.find(m => m.id === moduleId)?.name ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Scenario</p>
+                    <p className="text-sm text-gray-200 font-medium">{name || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">URL</p>
+                    <p className="text-xs text-emerald-400 font-mono break-all">{url || "—"}</p>
+                  </div>
+                  {(testCaseId || scenarioRefId) && (
+                    <div className="flex gap-4">
+                      {testCaseId && (
+                        <div>
+                          <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Kes ID</p>
+                          <p className="text-xs text-gray-300 font-mono">{testCaseId}</p>
+                        </div>
+                      )}
+                      {scenarioRefId && (
+                        <div>
+                          <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Scenario ID</p>
+                          <p className="text-xs text-gray-300 font-mono">{scenarioRefId}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {description && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Description</p>
+                      <p className="text-xs text-gray-400 whitespace-pre-wrap">{description}</p>
+                    </div>
+                  )}
+                  {tags && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Tags</p>
+                      <div className="flex flex-wrap gap-1">
+                        {tags.split(",").map(t => t.trim()).filter(Boolean).map(t => (
+                          <span key={t} className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(loginUrl && loginEmail) && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Auth</p>
+                      <p className="text-xs text-gray-400">{loginEmail} @ {loginUrl}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: Test config summary */}
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">Test Types</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {testTypes.map(t => {
+                        const tt = TEST_TYPES.find(x => x.value === t);
+                        return (
+                          <span key={t} className="text-xs bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-lg">
+                            {tt?.label ?? t}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {testSteps.length > 0 && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">Test Steps ({testSteps.length})</p>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {testSteps.map((step, i) => {
+                          const act = STEP_ACTIONS.find(a => a.value === step.action);
+                          return (
+                            <div key={step.id} className="flex items-center gap-2 text-xs text-gray-400">
+                              <span className="text-gray-600 font-mono w-4 text-right shrink-0">{i + 1}</span>
+                              <span>{act?.icon}</span>
+                              <span className="font-medium text-gray-300">{act?.label ?? step.action}</span>
+                              {step.target && <span className="text-gray-600 font-mono truncate">{step.target}</span>}
+                              {step.input && <span className="text-gray-500 truncate">= {step.input}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {roles.find(r => r.id === roleId) && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">User Role</p>
+                      <p className="text-xs text-gray-300">{roles.find(r => r.id === roleId)?.name}</p>
+                    </div>
+                  )}
+                  {members.find(m => m.id === assigneeId) && (
+                    <div>
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Assignee</p>
+                      <p className="text-xs text-gray-300">{members.find(m => m.id === assigneeId)?.name}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Footer */}
+        {/* Footer with wizard navigation */}
         <div className="px-6 py-3 border-t border-gray-800 flex items-center gap-3 shrink-0">
-          <button onClick={submit} disabled={saving}
-            className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition">
-            {saving ? "Saving…" : "Save"}
-          </button>
-          <button onClick={() => confirmAndClose(onBack ?? onClose)}
-            className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">{onBack ? "Back" : "Cancel"}</button>
+          {/* Left: Back / Previous */}
+          {wizardIdx > 0 ? (
+            <button onClick={prevStep}
+              className="flex items-center gap-1.5 px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">
+              <ArrowLeft className="w-3.5 h-3.5" /> {WIZARD_STEPS[wizardIdx - 1]}
+            </button>
+          ) : (
+            <button onClick={() => confirmAndClose(onBack ?? onClose)}
+              className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">
+              {onBack ? "Back" : "Cancel"}
+            </button>
+          )}
+
+          <div className="flex-1" />
+
           {savedAt && (
-            <span className="text-xs text-green-400 flex items-center gap-1 ml-auto">
+            <span className="text-xs text-green-400 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" /> Saved
             </span>
+          )}
+
+          {/* Right: Next / Save */}
+          {wizardIdx < WIZARD_STEPS.length - 1 ? (
+            <button onClick={nextStep} disabled={!canProceed()}
+              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2 rounded-lg transition">
+              {WIZARD_STEPS[wizardIdx + 1]} <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <button onClick={submit} disabled={saving}
+              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-6 py-2 rounded-lg transition">
+              {saving ? "Saving…" : scenario ? "Save Changes" : "Create Scenario"}
+            </button>
           )}
         </div>
       </div>

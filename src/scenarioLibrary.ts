@@ -21,12 +21,20 @@ export interface ScenarioAuthConfig { loginUrl: string; email: string; password:
 export interface ProjectRole {
   id: string; projectId: string; name: string; color: string; createdAt: string;
 }
+export interface TestStep {
+  id: string;
+  action: "navigate" | "click" | "fill" | "select" | "check" | "uncheck" | "hover" | "wait" | "screenshot" | "assert_visible" | "assert_text" | "assert_url" | "custom";
+  target?: string;
+  input?: string;
+  expected?: string;
+  description?: string;
+}
 export interface Scenario {
   id: string; moduleId: string; assigneeId?: string; roleId?: string;
   testCaseId?: string; scenarioRefId?: string;
   name: string; url: string; testTypes: TestType[];
   description?: string; tags: string[]; authConfig?: ScenarioAuthConfig;
-  customSpec?: string;
+  customSpec?: string; testSteps?: TestStep[];
   createdAt: string; updatedAt: string;
 }
 export interface RunRecord {
@@ -67,6 +75,7 @@ function mapScenario(s: any): Scenario {
            tags: parseJson<string[]>(s.tags, []),
            authConfig: parseJson<ScenarioAuthConfig | undefined>(s.authConfig, undefined),
            customSpec: s.customSpec ?? undefined,
+           testSteps: parseJson<TestStep[] | undefined>(s.testSteps, undefined),
            createdAt: s.createdAt instanceof Date ? s.createdAt.toISOString() : s.createdAt,
            updatedAt: s.updatedAt instanceof Date ? s.updatedAt.toISOString() : s.updatedAt };
 }
@@ -140,6 +149,7 @@ export async function createScenario(data: Omit<Scenario, "id" | "createdAt" | "
       tags: JSON.stringify(data.tags ?? []),
       authConfig: data.authConfig ? JSON.stringify(data.authConfig) : null,
       customSpec: data.customSpec ?? null,
+      testSteps: data.testSteps ? JSON.stringify(data.testSteps) : null,
     },
   });
   return mapScenario(s);
@@ -150,6 +160,7 @@ export async function updateScenario(id: string, data: Partial<Omit<Scenario, "i
   if (data.tags      !== undefined) update.tags      = JSON.stringify(data.tags);
   if (data.authConfig !== undefined) update.authConfig = data.authConfig ? JSON.stringify(data.authConfig) : null;
   if (data.customSpec !== undefined) update.customSpec = data.customSpec ?? null;
+  if (data.testSteps !== undefined) update.testSteps = data.testSteps ? JSON.stringify(data.testSteps) : null;
   const s = await prisma.scenario.update({ where: { id }, data: update });
   return mapScenario(s);
 }
