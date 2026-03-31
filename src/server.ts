@@ -64,11 +64,13 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 // SPA catch-all: serve index.html for client-side routes (before auth middleware)
 app.use((req, res, next) => {
-  // Serve index.html for browser navigation requests (not API/fetch calls)
-  const isApiCall = req.headers.accept && !req.headers.accept.includes("text/html");
+  // Treat root and standard browser navigations as HTML even if proxies tweak Accept header
+  const accept = req.headers.accept ?? "";
+  const wantsHtml = accept.includes("text/html") || req.path === "/";
+
   if (
     req.method !== "GET" ||
-    isApiCall ||
+    !wantsHtml ||
     req.path.startsWith("/auth/") ||
     req.path.startsWith("/library/") ||
     req.path.startsWith("/run-test") ||
@@ -77,6 +79,7 @@ app.use((req, res, next) => {
     req.path.startsWith("/playwright-report") ||
     req.path.includes(".")
   ) return next();
+
   const indexPath = path.join(clientDist, "index.html");
   fs.access(indexPath).then(() => res.sendFile(indexPath)).catch(() => next());
 });
