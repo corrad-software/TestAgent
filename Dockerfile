@@ -35,7 +35,8 @@ RUN npm ci --omit=dev
 COPY prisma ./prisma
 COPY prisma.config.ts ./
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/client/dist ./client/dist
+# Place built React client where server expects: dist/client/dist
+COPY --from=builder /app/client/dist ./dist/client/dist
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 RUN npx prisma generate \
