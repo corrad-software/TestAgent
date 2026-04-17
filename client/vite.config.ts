@@ -6,8 +6,8 @@ const apiProxy = {
   target: "http://localhost:4000",
   changeOrigin: true,
   bypass(req: { headers: { accept?: string }; url?: string }) {
-    // Let browser page navigations fall through to SPA, only proxy API/fetch calls
-    if (req.headers.accept?.includes("text/html")) return req.url;
+    // Proxy playwright reports to Express; SPA routes fall through to Vite
+    if (req.headers.accept?.includes("text/html") && !req.url?.startsWith("/playwright-report")) return req.url;
   },
 };
 

@@ -5,7 +5,7 @@ import {
   Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
   Layers, Inbox, FolderOpen, BarChart2, X, Loader,
   CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search, Settings,
-  ArrowRight, ArrowLeft, Code, ListOrdered,
+  ArrowRight, ArrowLeft, Code, ListOrdered, Folder, FolderOpen as FolderOpenIcon, ChevronRight, ChevronDown, ChevronUp,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
@@ -63,7 +63,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
       // Text search
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        if (!(s.name.toLowerCase().includes(q) || s.testCaseId?.toLowerCase().includes(q) || s.scenarioRefId?.toLowerCase().includes(q))) return false;
+        if (!(s.name.toLowerCase().includes(q) || s.scenarioRefId?.toLowerCase().includes(q) || (s.caseNumber != null && String(s.caseNumber).padStart(3,"0").includes(q)))) return false;
       }
       // Flow filter
       if (flowFilter !== "all") {
@@ -80,6 +80,61 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
       return true;
     });
   }, [scenarios, searchQuery, flowFilter, statusFilter, historyMap]);
+
+  // ── Groups ─────────────────────────────────────────────────────────────────
+  const { data: groups = [] } = useQuery<api.ScenarioGroup[]>({
+    queryKey: ["groups", activeModuleId],
+    queryFn: () => api.getGroups(activeModuleId!),
+    enabled: !!activeModuleId,
+  });
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null | "root">(null);
+
+  const invalidateGroups = useCallback(() => qc.invalidateQueries({ queryKey: ["groups", activeModuleId] }), [qc, activeModuleId]);
+
+  const createGroupMut = useMutation({
+    mutationFn: ({ name, parentId }: { name: string; parentId?: string }) =>
+      api.createGroup(activeModuleId!, { name, parentId }),
+    onSuccess: (g) => {
+      invalidateGroups();
+      setExpandedGroups(prev => { const s = new Set(prev); if (g.parentId) s.add(g.parentId); return s; });
+    },
+  });
+  const updateGroupMut = useMutation({
+    mutationFn: ({ id, name, sortOrder }: { id: string; name?: string; sortOrder?: number }) => api.updateGroup(id, { name, sortOrder }),
+    onSuccess: invalidateGroups,
+  });
+  const deleteGroupMut = useMutation({
+    mutationFn: api.deleteGroup,
+    onSuccess: invalidateGroups,
+  });
+  const moveGroupMut = useMutation({
+    mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) => api.moveGroup(id, parentId),
+    onSuccess: invalidateGroups,
+    onError: (err: Error) => alert(err.message),
+  });
+  const moveScenarioMut = useMutation({
+    mutationFn: ({ id, groupId }: { id: string; groupId: string | null }) => api.moveScenario(id, groupId),
+    onSuccess: () => { invalidate(); },
+  });
+
+  // Swap sortOrder with a sibling group
+  const reorderGroup = useCallback((groupId: string, direction: -1 | 1) => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return;
+    const siblings = groups
+      .filter(g => (g.parentId ?? null) === (group.parentId ?? null))
+      .sort((a, b) => a.sortOrder - b.sortOrder || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const idx = siblings.findIndex(g => g.id === groupId);
+    const swapIdx = idx + direction;
+    if (swapIdx < 0 || swapIdx >= siblings.length) return;
+    const a = siblings[idx], b = siblings[swapIdx];
+    // Normalize if sortOrders collide
+    const aOrder = a.sortOrder === b.sortOrder ? (direction === -1 ? b.sortOrder - 1 : b.sortOrder + 1) : b.sortOrder;
+    const bOrder = a.sortOrder === b.sortOrder ? a.sortOrder : a.sortOrder;
+    updateGroupMut.mutate({ id: a.id, sortOrder: aOrder });
+    updateGroupMut.mutate({ id: b.id, sortOrder: bOrder });
+  }, [groups, updateGroupMut]);
 
   const { data: members = [] } = useQuery({
     queryKey: ["members", effectiveProjectId],
@@ -287,9 +342,24 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                   ? <span className="text-gray-200 font-medium">{activeModule.name}</span>
                   : <span className="text-gray-600 italic">Select a module to view scenarios</span>}
               </span>
-              {activeModule && scenarios.length > 0 && (
-                <span className="text-xs text-gray-600">{filteredScenarios.length} of {scenarios.length}</span>
-              )}
+              <div className="flex items-center gap-2">
+                {activeModule && (
+                  <button
+                    onClick={() => {
+                      const name = prompt("Group name:");
+                      if (name?.trim()) createGroupMut.mutate({ name: name.trim() });
+                    }}
+                    title="Add group"
+                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-emerald-400 transition px-2 py-1 rounded hover:bg-gray-800"
+                  >
+                    <Folder className="w-3.5 h-3.5" /><Plus className="w-2.5 h-2.5" />
+                    <span>Add Group</span>
+                  </button>
+                )}
+                {activeModule && scenarios.length > 0 && (
+                  <span className="text-xs text-gray-600">{filteredScenarios.length} of {scenarios.length}</span>
+                )}
+              </div>
             </div>
             {activeModule && scenarios.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
@@ -339,16 +409,56 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                 {/* Table header */}
                 <div className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-widest border-b border-gray-800 sticky top-0 bg-gray-950 z-[1]">
                   <span className="w-6 shrink-0" />
-                  <span className="w-56 shrink-0 hidden lg:block">Kes ID</span>
-                  <span className="w-56 shrink-0 hidden xl:block">Scenario ID</span>
+                  <span className="w-16 shrink-0 hidden lg:block">ID</span>
+                  <span className="w-40 shrink-0 hidden xl:block">Scenario ID</span>
                   <span className="flex-1 min-w-0">Scenario</span>
                   <span className="w-14 shrink-0 text-center hidden md:block">Flow</span>
                   <span className="w-16 shrink-0 text-center">Status</span>
                 </div>
-                {filteredScenarios.map((s: api.Scenario) => (
+                {/* Root drop zone */}
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragOverGroupId("root"); }}
+                  onDragLeave={() => setDragOverGroupId(null)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    const sid = e.dataTransfer.getData("scenarioId");
+                    const gid = e.dataTransfer.getData("groupId");
+                    if (sid) moveScenarioMut.mutate({ id: sid, groupId: null });
+                    else if (gid) moveGroupMut.mutate({ id: gid, parentId: null });
+                    setDragOverGroupId(null);
+                  }}
+                  className={`min-h-[4px] transition ${dragOverGroupId === "root" ? "bg-emerald-500/20 rounded" : ""}`}
+                />
+                {/* Group tree */}
+                <GroupTree
+                  groups={groups}
+                  scenarios={filteredScenarios}
+                  parentId={null}
+                  depth={0}
+                  expandedGroups={expandedGroups}
+                  setExpandedGroups={setExpandedGroups}
+                  dragOverGroupId={dragOverGroupId}
+                  setDragOverGroupId={setDragOverGroupId}
+                  onSelectScenario={s => setSelectedScenario(s)}
+                  onCreateGroup={(parentId) => {
+                    const name = prompt("Group name:");
+                    if (name?.trim()) createGroupMut.mutate({ name: name.trim(), parentId });
+                  }}
+                  onDeleteGroup={(id) => {
+                    if (confirm("Delete group? Scenarios inside will be ungrouped.")) deleteGroupMut.mutate(id);
+                  }}
+                  onMoveScenario={(sid, gid) => moveScenarioMut.mutate({ id: sid, groupId: gid })}
+                  onMoveGroup={(gid, parentId) => moveGroupMut.mutate({ id: gid, parentId })}
+                  onRenameGroupInline={(id, name) => updateGroupMut.mutate({ id, name })}
+                  onReorderGroup={reorderGroup}
+                  moduleId={activeModuleId}
+                />
+                {/* Ungrouped scenarios */}
+                {filteredScenarios.filter(s => !s.groupId).map((s: api.Scenario) => (
                   <ScenarioRow
                     key={s.id}
                     scenario={s}
+                    depth={0}
                     onSelect={() => setSelectedScenario(s)}
                   />
                 ))}
@@ -426,9 +536,193 @@ function EmptyState({ icon, text, sub, action }: { icon: React.ReactNode; text: 
   );
 }
 
+// ─── Group Tree ───────────────────────────────────────────────────────────────
+interface GroupTreeProps {
+  groups: api.ScenarioGroup[];
+  scenarios: api.Scenario[];
+  parentId: string | null;
+  depth: number;
+  expandedGroups: Set<string>;
+  setExpandedGroups: React.Dispatch<React.SetStateAction<Set<string>>>;
+  dragOverGroupId: string | null | "root";
+  setDragOverGroupId: (id: string | null | "root") => void;
+  onSelectScenario: (s: api.Scenario) => void;
+  onCreateGroup: (parentId?: string) => void;
+  onDeleteGroup: (id: string) => void;
+  onMoveScenario: (sid: string, gid: string | null) => void;
+  onMoveGroup: (gid: string, parentId: string | null) => void;
+  onRenameGroupInline: (id: string, name: string) => void;
+  onReorderGroup: (id: string, direction: -1 | 1) => void;
+  moduleId: string;
+}
+
+function GroupTree(props: GroupTreeProps) {
+  const {
+    groups, scenarios, parentId, depth,
+    expandedGroups, setExpandedGroups,
+    dragOverGroupId, setDragOverGroupId,
+    onSelectScenario, onCreateGroup, onDeleteGroup,
+    onMoveScenario, onMoveGroup, onRenameGroupInline, onReorderGroup,
+  } = props;
+
+  const siblings = groups
+    .filter(g => (g.parentId ?? null) === parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  return (
+    <>
+      {siblings.map((group, idx) => {
+        const isOpen = expandedGroups.has(group.id);
+        const childScenarios = scenarios.filter(s => s.groupId === group.id);
+        const hasChildren = groups.some(g => g.parentId === group.id) || childScenarios.length > 0;
+        const isDragOver = dragOverGroupId === group.id;
+        return (
+          <GroupRow
+            key={group.id}
+            group={group}
+            depth={depth}
+            isOpen={isOpen}
+            hasChildren={hasChildren}
+            isDragOver={isDragOver}
+            canMoveUp={idx > 0}
+            canMoveDown={idx < siblings.length - 1}
+            canAddSub={depth < 4}
+            onToggle={() => setExpandedGroups(prev => {
+              const s = new Set(prev);
+              s.has(group.id) ? s.delete(group.id) : s.add(group.id);
+              return s;
+            })}
+            onDragStartGroup={e => {
+              e.dataTransfer.setData("groupId", group.id);
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOverGroupId(group.id); }}
+            onDragLeave={() => setDragOverGroupId(null)}
+            onDrop={e => {
+              e.preventDefault(); e.stopPropagation();
+              const sid = e.dataTransfer.getData("scenarioId");
+              const gid = e.dataTransfer.getData("groupId");
+              if (sid) {
+                onMoveScenario(sid, group.id);
+                setExpandedGroups(p => { const s = new Set(p); s.add(group.id); return s; });
+              } else if (gid && gid !== group.id) {
+                onMoveGroup(gid, group.id);
+                setExpandedGroups(p => { const s = new Set(p); s.add(group.id); return s; });
+              }
+              setDragOverGroupId(null);
+            }}
+            onAddSub={() => depth < 4 && onCreateGroup(group.id)}
+            onDelete={() => onDeleteGroup(group.id)}
+            onRename={name => onRenameGroupInline(group.id, name)}
+            onMoveUp={() => onReorderGroup(group.id, -1)}
+            onMoveDown={() => onReorderGroup(group.id, 1)}
+          >
+            {isOpen && (
+              <>
+                <GroupTree {...props} parentId={group.id} depth={depth + 1} />
+                {childScenarios.map(s => (
+                  <ScenarioRow key={s.id} scenario={s} depth={depth + 1} onSelect={() => onSelectScenario(s)} />
+                ))}
+              </>
+            )}
+          </GroupRow>
+        );
+      })}
+    </>
+  );
+}
+
+function GroupRow({
+  group, depth, isOpen, hasChildren, isDragOver,
+  canMoveUp, canMoveDown, canAddSub,
+  onToggle, onDragStartGroup, onDragOver, onDragLeave, onDrop,
+  onAddSub, onDelete, onRename, onMoveUp, onMoveDown, children,
+}: {
+  group: api.ScenarioGroup; depth: number; isOpen: boolean;
+  hasChildren: boolean; isDragOver: boolean;
+  canMoveUp: boolean; canMoveDown: boolean; canAddSub: boolean;
+  onToggle: () => void;
+  onDragStartGroup: React.DragEventHandler;
+  onDragOver: React.DragEventHandler;
+  onDragLeave: React.DragEventHandler;
+  onDrop: React.DragEventHandler;
+  onAddSub: () => void;
+  onDelete: () => void;
+  onRename: (name: string) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  children?: React.ReactNode;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(group.name);
+  const indent = depth * 16;
+
+  function commitRename() {
+    if (editName.trim() && editName.trim() !== group.name) onRename(editName.trim());
+    setEditing(false);
+  }
+
+  return (
+    <div>
+      <div
+        draggable={!editing}
+        onDragStart={onDragStartGroup}
+        onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+        className={`flex items-center gap-1.5 px-4 py-1.5 border-b border-gray-800/40 group/group transition cursor-grab active:cursor-grabbing
+          ${isDragOver ? "bg-emerald-500/15 border-emerald-500/40" : "hover:bg-gray-900/50"}`}
+        style={{ paddingLeft: `${16 + indent}px` }}
+      >
+        <button onClick={onToggle} className="w-4 h-4 flex items-center justify-center text-gray-600 hover:text-gray-400 shrink-0">
+          {hasChildren ? (isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />) : <span className="w-3" />}
+        </button>
+        {isOpen ? <FolderOpenIcon className="w-3.5 h-3.5 text-yellow-500/70 shrink-0" /> : <Folder className="w-3.5 h-3.5 text-yellow-500/70 shrink-0" />}
+
+        {editing ? (
+          <input
+            autoFocus value={editName}
+            onChange={e => setEditName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setEditing(false); }}
+            className="flex-1 bg-gray-800 border border-emerald-500 rounded px-1.5 py-0.5 text-xs text-gray-200 outline-none"
+          />
+        ) : (
+          <span
+            className="flex-1 text-xs text-gray-300 font-medium truncate cursor-default select-none"
+            onDoubleClick={() => { setEditName(group.name); setEditing(true); }}
+            title="Double-click to rename · Drag to move"
+          >{group.name}</span>
+        )}
+
+        <div className="flex items-center gap-0.5 opacity-0 group-hover/group:opacity-100 transition">
+          <button onClick={onMoveUp} disabled={!canMoveUp} title="Move up"
+            className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-600 text-xs">
+            <ChevronUp className="w-3 h-3" /><span>Up</span>
+          </button>
+          <button onClick={onMoveDown} disabled={!canMoveDown} title="Move down"
+            className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-600 text-xs">
+            <ChevronDown className="w-3 h-3" /><span>Down</span>
+          </button>
+          {canAddSub && (
+            <button onClick={onAddSub} title="Add sub-group"
+              className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-emerald-400 text-xs">
+              <Plus className="w-3 h-3" /><span>Sub</span>
+            </button>
+          )}
+          <button onClick={onDelete} title="Delete group"
+            className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-red-400 text-xs">
+            <X className="w-3 h-3" /><span>Del</span>
+          </button>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 // ─── Scenario Row (clickable list view) ──────────────────────────────────────
-function ScenarioRow({ scenario: s, onSelect }: {
+function ScenarioRow({ scenario: s, depth = 0, onSelect }: {
   scenario: api.Scenario;
+  depth?: number;
   onSelect: () => void;
 }) {
   const { data: history } = useQuery({
@@ -437,10 +731,16 @@ function ScenarioRow({ scenario: s, onSelect }: {
   });
   const lastRun = history?.[0];
   const flowTag = s.tags.find(t => t === "positif" || t === "negatif");
+  const indent = depth * 16;
 
   return (
-    <div onClick={onSelect}
-      className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/60 hover:bg-gray-900/70 cursor-pointer transition">
+    <div
+      onClick={onSelect}
+      draggable
+      onDragStart={e => e.dataTransfer.setData("scenarioId", s.id)}
+      className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/60 hover:bg-gray-900/70 cursor-pointer transition"
+      style={{ paddingLeft: `${16 + indent + 20}px` }}
+    >
       {/* Status dot */}
       <span className="w-6 flex justify-center shrink-0">
         {lastRun ? (
@@ -450,13 +750,13 @@ function ScenarioRow({ scenario: s, onSelect }: {
         )}
       </span>
 
-      {/* Kes ID */}
-      <span className="w-56 shrink-0 hidden lg:block text-xs text-gray-400 font-mono truncate">
-        {s.testCaseId || "—"}
+      {/* Case number */}
+      <span className="w-16 shrink-0 hidden lg:block text-xs text-gray-500 font-mono">
+        {s.caseNumber != null ? String(s.caseNumber).padStart(3, "0") : "—"}
       </span>
 
       {/* Scenario ID */}
-      <span className="w-56 shrink-0 hidden xl:block text-xs text-gray-500 font-mono truncate">
+      <span className="w-40 shrink-0 hidden xl:block text-xs text-gray-600 font-mono truncate">
         {s.scenarioRefId || "—"}
       </span>
 
@@ -503,8 +803,8 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
   const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
   const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
-  const [runMode, setRunMode]           = useState<"template" | "recorded" | "steps">(
-    s.testSteps?.length ? "steps" : s.customSpec ? "recorded" : "template"
+  const [runMode, setRunMode]           = useState<"recorded" | "steps">(
+    s.testSteps?.length ? "steps" : "recorded"
   );
   const [showCode, setShowCode]         = useState(false);
   const [showSteps, setShowSteps]       = useState(false);
@@ -550,7 +850,7 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
         body: JSON.stringify({
           headed,
           useCustomSpec: runMode === "recorded" && !!recordedCode,
-          useTestSteps: runMode === "steps" && !!s.testSteps?.length,
+          useTestSteps: runMode === "steps",
           environmentId: selectedEnvId || undefined,
         }),
       });
@@ -639,7 +939,7 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
     if (!confirm("Delete the recorded spec? This cannot be undone.")) return;
     await fetch(`/library/scenarios/${s.id}/custom-spec`, { method: "DELETE" });
     setRecordedCode(null);
-    setRunMode("template");
+    setRunMode("recorded");
     setShowCode(false);
     onRefresh();
   }
@@ -691,8 +991,8 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-white leading-tight">{s.name}</h2>
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-              {s.testCaseId && (
-                <span className="text-xs text-gray-400 font-mono">{s.testCaseId}</span>
+              {s.caseNumber != null && (
+                <span className="text-xs bg-gray-800 text-gray-400 font-mono px-2 py-0.5 rounded">#{String(s.caseNumber).padStart(3, "0")}</span>
               )}
               {s.scenarioRefId && (
                 <span className="text-xs text-gray-500 font-mono">{s.scenarioRefId}</span>
@@ -732,11 +1032,9 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Test Types</p>
               <div className="flex flex-col gap-1">
                 {s.testTypes.map(t => {
-                  // Use live result if available, else fall back to lastRun
                   const liveResult = result;
                   const hasRun = liveResult || lastRun;
                   const isPassed = liveResult ? liveResult.passed : lastRun?.passed;
-                  // During a run, show spinner for current/pending types
                   const isRunningThis = running && !liveResult;
                   return (
                     <div key={t} className="flex items-center gap-2">
@@ -806,25 +1104,17 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
               </div>
             )}
 
-            {/* Run mode toggle */}
-            {(recordedCode || (s.testSteps && s.testSteps.length > 0)) && (
+            {/* Run mode toggle — only shown when test steps also exist alongside recorded spec */}
+            {recordedCode && s.testSteps && s.testSteps.length > 0 && (
               <div className="flex items-center gap-0.5 bg-gray-950 rounded-lg p-0.5">
-                <button onClick={() => setRunMode("template")}
-                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "template" ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
-                  Template
+                <button onClick={() => setRunMode("recorded")}
+                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "recorded" ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
+                  Recorded
                 </button>
-                {s.testSteps && s.testSteps.length > 0 && (
-                  <button onClick={() => setRunMode("steps")}
-                    className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "steps" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
-                    Steps
-                  </button>
-                )}
-                {recordedCode && (
-                  <button onClick={() => setRunMode("recorded")}
-                    className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "recorded" ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
-                    Recorded
-                  </button>
-                )}
+                <button onClick={() => setRunMode("steps")}
+                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "steps" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
+                  Steps
+                </button>
               </div>
             )}
 
@@ -834,13 +1124,13 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
                 className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition"
                 title="Headless — runs in background, faster and uses less resources. Best for automated testing.">
                 {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Headless{runMode === "recorded" ? " (Rec)" : runMode === "steps" ? " (Steps)" : ""}
+                Headless{runMode === "steps" ? " (Steps)" : ""}
               </button>
               <button onClick={() => run(true)} disabled={running || recording}
                 className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white py-2 rounded-lg transition"
                 title="Visible Browser — opens a real browser window so you can watch the test run. Useful for debugging and verifying test steps.">
                 <Monitor className="w-3.5 h-3.5" />
-                Visible{runMode === "recorded" ? " (Rec)" : runMode === "steps" ? " (Steps)" : ""}
+                Visible{runMode === "steps" ? " (Steps)" : ""}
               </button>
             </div>
 
@@ -919,10 +1209,22 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
 
             {/* Report link */}
             {effectiveReportUrl && (
-              <a href={effectiveReportUrl} target="_blank" rel="noreferrer"
-                className="flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition">
-                <BarChart2 className="w-3.5 h-3.5" /> View Report
-              </a>
+              <div className="flex gap-2">
+                <a href={effectiveReportUrl} target="_blank" rel="noreferrer"
+                  className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition">
+                  <BarChart2 className="w-3.5 h-3.5" /> View Report
+                </a>
+                {(reportUrl ?? lastReportUrl) && (() => {
+                  const rid = (reportUrl ?? lastReportUrl)!.split("/playwright-report/")[1]?.split("/")[0];
+                  return rid ? (
+                    <a href={`/playwright-report/${rid}/download`}
+                      className="flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 px-3 rounded-lg transition"
+                      title="Download report as ZIP">
+                      <Download className="w-3.5 h-3.5" /> ZIP
+                    </a>
+                  ) : null;
+                })()}
+              </div>
             )}
 
             {/* Edit / Delete */}
@@ -1005,10 +1307,16 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
                       <div className="px-4 pb-3 space-y-2">
                         <p className="text-xs text-gray-500">{run.summary}</p>
                         {run.reportId && (
-                          <a href={`/playwright-report/${run.reportId}/index.html`} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
-                            <BarChart2 className="w-3 h-3" /> View Report
-                          </a>
+                          <div className="flex items-center gap-3">
+                            <a href={`/playwright-report/${run.reportId}/index.html`} target="_blank" rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                              <BarChart2 className="w-3 h-3" /> View Report
+                            </a>
+                            <a href={`/playwright-report/${run.reportId}/download`}
+                              className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 hover:underline">
+                              <Download className="w-3 h-3" /> Download ZIP
+                            </a>
+                          </div>
                         )}
                         {run.logs ? (
                           <pre className="text-xs font-mono text-gray-500 bg-gray-900 border border-gray-800 rounded-lg p-3 max-h-48 overflow-auto whitespace-pre-wrap">
@@ -1275,11 +1583,10 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
 
   // Form state
   const [moduleId,      setModuleId]      = useState(scenario?.moduleId ?? defaultModuleId);
-  const [testCaseId,    setTestCaseId]    = useState(scenario?.testCaseId ?? "");
   const [scenarioRefId, setScenarioRefId] = useState(scenario?.scenarioRefId ?? "");
   const [name,        setName]        = useState(scenario?.name ?? "");
   const [url,         setUrl]         = useState(scenario?.url ?? "");
-  const [testTypes,   setTestTypes]   = useState<string[]>(scenario?.testTypes ?? ["smoke"]);
+  const [testTypes, setTestTypes] = useState<string[]>(scenario?.testTypes ?? ["smoke"]);
   const [description, setDescription] = useState(scenario?.description ?? "");
   const [tags,        setTags]        = useState((scenario?.tags ?? []).join(", "));
   const [assigneeId,  setAssigneeId]  = useState(scenario?.assigneeId ?? "");
@@ -1296,7 +1603,7 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
   const [snapshot, setSnapshot] = useState(() => getFormValues());
 
   function getFormValues() {
-    return JSON.stringify({ moduleId, testCaseId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass, testSteps });
+    return JSON.stringify({ moduleId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass, testSteps });
   }
 
   const isDirty = () => getFormValues() !== snapshot;
@@ -1316,14 +1623,14 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
     return () => clearTimeout(t);
   }, [savedAt]);
 
-  const toggleType = (t: string) =>
-    setTestTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
-
   function canProceed(): boolean {
     if (wizardStep === "Basics") return !!(moduleId && name.trim() && url.trim());
     if (wizardStep === "Test Design") return testTypes.length > 0;
     return true;
   }
+
+  const toggleType = (t: string) =>
+    setTestTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
   function nextStep() {
     if (wizardIdx < WIZARD_STEPS.length - 1) setWizardStep(WIZARD_STEPS[wizardIdx + 1]);
@@ -1340,7 +1647,7 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
       ? { loginUrl, email: loginEmail, password: loginPass } : undefined;
     const ok = await onSave({
       moduleId, name: name.trim(), url: url.trim(), testTypes: testTypes as any,
-      testCaseId: testCaseId.trim() || undefined, scenarioRefId: scenarioRefId.trim() || undefined,
+      scenarioRefId: scenarioRefId.trim() || undefined,
       description: description.trim() || undefined,
       tags: tags.split(",").map(t => t.trim()).filter(Boolean),
       authConfig, assigneeId: assigneeId || undefined, roleId: roleId || undefined,
@@ -1437,10 +1744,6 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
                 <input value={url} onChange={e => setUrl(e.target.value)} type="url" placeholder="https://example.com" className={inputCls} />
               </div>
               <div className="space-y-1">
-                <label className={labelCls}>Kes ID {optSpan}</label>
-                <input value={testCaseId} onChange={e => setTestCaseId(e.target.value)} placeholder="e.g. TC-NAS-PRF-01" className={inputCls + " font-mono"} />
-              </div>
-              <div className="space-y-1">
                 <label className={labelCls}>Scenario ID {optSpan}</label>
                 <input value={scenarioRefId} onChange={e => setScenarioRefId(e.target.value)} placeholder="e.g. SR-NAS-PRF-01" className={inputCls + " font-mono"} />
               </div>
@@ -1489,11 +1792,8 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
           {/* ─── Step 2: Test Design ─── */}
           {wizardStep === "Test Design" && (
             <div className="space-y-4">
-              {/* Test types */}
               <div className="space-y-1.5">
-                <label className={labelCls}>
-                  Test Types <span className="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span>
-                </label>
+                <label className={labelCls}>Test Types <span className="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span></label>
                 <div className="flex flex-wrap gap-2">
                   {TEST_TYPES.map(({ value, label }) => (
                     <button key={value} type="button" onClick={() => toggleType(value)}
@@ -1506,8 +1806,6 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
                   ))}
                 </div>
               </div>
-
-              {/* Divider */}
               <div className="border-t border-gray-800 pt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <ListOrdered className="w-4 h-4 text-emerald-400" />
@@ -1539,14 +1837,8 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
                     <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">URL</p>
                     <p className="text-xs text-emerald-400 font-mono break-all">{url || "—"}</p>
                   </div>
-                  {(testCaseId || scenarioRefId) && (
+                  {scenarioRefId && (
                     <div className="flex gap-4">
-                      {testCaseId && (
-                        <div>
-                          <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Kes ID</p>
-                          <p className="text-xs text-gray-300 font-mono">{testCaseId}</p>
-                        </div>
-                      )}
                       {scenarioRefId && (
                         <div>
                           <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Scenario ID</p>

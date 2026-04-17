@@ -46,6 +46,12 @@ import {
   createEnvironment,
   updateEnvironment,
   deleteEnvironment,
+  getGroups,
+  createGroup,
+  updateGroup,
+  moveGroup,
+  deleteGroup,
+  moveScenario,
 } from "./scenarioLibrary";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -79,6 +85,21 @@ app.use((req, res, next) => {
   ) return next();
   const indexPath = path.join(clientDist, "index.html");
   fs.access(indexPath).then(() => res.sendFile(indexPath)).catch(() => next());
+});
+
+// Download a report as a ZIP file
+app.get("/playwright-report/:runId/download", async (req, res) => {
+  const runId = req.params.runId;
+  if (!/^[\w-]+$/.test(runId)) { res.status(400).send("Invalid report ID"); return; }
+  const reportDir = path.join(process.cwd(), "playwright-reports", runId);
+  try { await fs.stat(reportDir); } catch { res.status(404).send("Report not found"); return; }
+  const archiver = (await import("archiver")).default;
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="report-${runId}.zip"`);
+  const archive = archiver("zip", { zlib: { level: 6 } });
+  archive.pipe(res);
+  archive.directory(reportDir, false);
+  await archive.finalize();
 });
 
 // Serve per-run Playwright HTML reports dynamically
@@ -245,13 +266,22 @@ async function checkLogin(
   const browser = await chromium.launch({ headless: !headed });
   const page = await browser.newPage();
   try {
-    await page.goto(authConfig.loginUrl, { timeout: 20000 });
+    await page.goto(authConfig.loginUrl, { timeout: 20000, waitUntil: 'networkidle' });
     onLog(`🔐 [AUTH] Login page loaded`);
+
+    // Wait for any input to appear (SPA may render form after JS loads)
+    try {
+      await page.waitForSelector('input', { timeout: 10000 });
+    } catch {
+      onLog(`❌ [AUTH] No input fields appeared on login page after waiting`);
+      return false;
+    }
 
     // Find email/username field
     const emailSelectors = [
       'input[type="email"]', 'input[name="email"]', 'input[name="username"]',
       'input[name="userId"]', 'input[id*="email"]', 'input[id*="user"]', 'input[id*="login"]',
+      'input[type="text"]',
     ];
     let emailField = null;
     for (const sel of emailSelectors) {
@@ -509,6 +539,32 @@ app.put("/library/modules/:id",  requireAdmin, async (req, res) => {
 });
 app.delete("/library/modules/:id", requireAdmin, async (req, res) => {
   try { await deleteModule(req.params.id as string); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+
+// ─── Library: Groups ─────────────────────────────────────────────────────────
+app.get("/library/modules/:moduleId/groups", async (req, res) => {
+  try { res.json(await getGroups(req.params.moduleId)); }
+  catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+app.post("/library/modules/:moduleId/groups", async (req, res) => {
+  try { res.json(await createGroup({ moduleId: req.params.moduleId, ...req.body })); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.put("/library/groups/:id", async (req, res) => {
+  try { res.json(await updateGroup(req.params.id, req.body)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.patch("/library/groups/:id/move", async (req, res) => {
+  try { res.json(await moveGroup(req.params.id, req.body.parentId ?? null)); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.delete("/library/groups/:id", async (req, res) => {
+  try { await deleteGroup(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
+app.patch("/library/scenarios/:id/move", async (req, res) => {
+  try { res.json(await moveScenario(req.params.id, req.body.groupId ?? null)); }
   catch (err) { res.status(400).json({ error: (err as Error).message }); }
 });
 

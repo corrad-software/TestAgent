@@ -29,8 +29,14 @@ export interface TestStep {
   expected?: string;
   description?: string;
 }
+export interface ScenarioGroup {
+  id: string; moduleId: string; parentId?: string;
+  name: string; sortOrder: number;
+  createdAt: string; updatedAt: string;
+}
 export interface Scenario {
-  id: string; moduleId: string; assigneeId?: string; roleId?: string;
+  id: string; caseNumber?: number; moduleId: string; groupId?: string;
+  assigneeId?: string; roleId?: string;
   testCaseId?: string; scenarioRefId?: string;
   name: string; url: string; testTypes: TestType[];
   description?: string; tags: string[]; authConfig?: ScenarioAuthConfig;
@@ -65,8 +71,16 @@ function mapRole(r: any): ProjectRole {
   return { id: r.id, projectId: r.projectId, name: r.name, color: r.color,
            createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt };
 }
+function mapGroup(g: any): ScenarioGroup {
+  return { id: g.id, moduleId: g.moduleId, parentId: g.parentId ?? undefined,
+           name: g.name, sortOrder: g.sortOrder,
+           createdAt: g.createdAt instanceof Date ? g.createdAt.toISOString() : g.createdAt,
+           updatedAt: g.updatedAt instanceof Date ? g.updatedAt.toISOString() : g.updatedAt };
+}
 function mapScenario(s: any): Scenario {
-  return { id: s.id, moduleId: s.moduleId, assigneeId: s.assigneeId ?? undefined,
+  return { id: s.id, caseNumber: s.caseNumber ?? undefined,
+           moduleId: s.moduleId, groupId: s.groupId ?? undefined,
+           assigneeId: s.assigneeId ?? undefined,
            roleId: s.roleId ?? undefined,
            testCaseId: s.testCaseId ?? undefined, scenarioRefId: s.scenarioRefId ?? undefined,
            name: s.name, url: s.url,
@@ -138,10 +152,14 @@ export async function deleteModule(id: string): Promise<void> {
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────
 
-export async function createScenario(data: Omit<Scenario, "id" | "createdAt" | "updatedAt">): Promise<Scenario> {
+export async function createScenario(data: Omit<Scenario, "id" | "caseNumber" | "createdAt" | "updatedAt">): Promise<Scenario> {
+  const maxRow = await prisma.scenario.findFirst({ orderBy: { caseNumber: "desc" }, select: { caseNumber: true } });
+  const nextCaseNumber = (maxRow?.caseNumber ?? 0) + 1;
   const s = await prisma.scenario.create({
     data: {
-      moduleId: data.moduleId, assigneeId: data.assigneeId, roleId: data.roleId,
+      caseNumber: nextCaseNumber,
+      moduleId: data.moduleId, groupId: data.groupId ?? null,
+      assigneeId: data.assigneeId, roleId: data.roleId,
       testCaseId: data.testCaseId, scenarioRefId: data.scenarioRefId,
       name: data.name, url: data.url,
       testTypes: JSON.stringify(data.testTypes),
@@ -170,6 +188,69 @@ export async function deleteScenario(id: string): Promise<void> {
 export async function getScenario(id: string): Promise<Scenario | undefined> {
   const s = await prisma.scenario.findUnique({ where: { id } });
   return s ? mapScenario(s) : undefined;
+}
+
+// ─── Scenario Groups ──────────────────────────────────────────────────────────
+
+async function getGroupDepth(groupId: string): Promise<number> {
+  let depth = 0;
+  let current = await prisma.scenarioGroup.findUnique({ where: { id: groupId }, select: { parentId: true } });
+  while (current?.parentId) {
+    depth++;
+    current = await prisma.scenarioGroup.findUnique({ where: { id: current.parentId }, select: { parentId: true } });
+    if (depth > 5) break;
+  }
+  return depth;
+}
+
+export async function getGroups(moduleId: string): Promise<ScenarioGroup[]> {
+  const rows = await prisma.scenarioGroup.findMany({ where: { moduleId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
+  return rows.map(mapGroup);
+}
+
+export async function createGroup(data: { moduleId: string; parentId?: string; name: string }): Promise<ScenarioGroup> {
+  if (data.parentId) {
+    const depth = await getGroupDepth(data.parentId);
+    if (depth >= 4) throw new Error("Maximum group depth of 5 tiers reached");
+  }
+  const g = await prisma.scenarioGroup.create({ data: { moduleId: data.moduleId, parentId: data.parentId ?? null, name: data.name } });
+  return mapGroup(g);
+}
+
+export async function updateGroup(id: string, data: { name?: string; sortOrder?: number }): Promise<ScenarioGroup> {
+  const g = await prisma.scenarioGroup.update({ where: { id }, data });
+  return mapGroup(g);
+}
+
+export async function moveGroup(id: string, newParentId: string | null): Promise<ScenarioGroup> {
+  if (newParentId === id) throw new Error("Cannot move a group into itself");
+  if (newParentId) {
+    // Prevent cycle: walk up from newParent; if we hit `id`, abort
+    let cur: { parentId: string | null } | null = await prisma.scenarioGroup.findUnique({ where: { id: newParentId }, select: { parentId: true } });
+    while (cur) {
+      if (cur.parentId === id) throw new Error("Cannot move a group into its own descendant");
+      if (!cur.parentId) break;
+      cur = await prisma.scenarioGroup.findUnique({ where: { id: cur.parentId }, select: { parentId: true } });
+    }
+    const depth = await getGroupDepth(newParentId);
+    if (depth >= 4) throw new Error("Maximum group depth of 5 tiers reached");
+  }
+  const g = await prisma.scenarioGroup.update({ where: { id }, data: { parentId: newParentId } });
+  return mapGroup(g);
+}
+
+export async function deleteGroup(id: string): Promise<void> {
+  // Ungroup scenarios before deleting
+  await prisma.scenario.updateMany({ where: { groupId: id }, data: { groupId: null } });
+  // Re-parent children to the group's parent
+  const group = await prisma.scenarioGroup.findUnique({ where: { id }, select: { parentId: true } });
+  await prisma.scenarioGroup.updateMany({ where: { parentId: id }, data: { parentId: group?.parentId ?? null } });
+  await prisma.scenarioGroup.delete({ where: { id } });
+}
+
+export async function moveScenario(id: string, groupId: string | null): Promise<Scenario> {
+  const s = await prisma.scenario.update({ where: { id }, data: { groupId } });
+  return mapScenario(s);
 }
 
 // ─── Run History ──────────────────────────────────────────────────────────────
@@ -361,11 +442,13 @@ export async function getDailyStats(projectId?: string, rangeDays = 30): Promise
 export async function getLibrary() {
   const projects = await prisma.project.findMany();
   const modules  = await prisma.module.findMany();
-  const scenarios = await prisma.scenario.findMany();
+  const scenarios = await prisma.scenario.findMany({ orderBy: { caseNumber: "asc" } });
+  const groups   = await prisma.scenarioGroup.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
   return {
     projects: projects.map(mapProject),
     modules:  modules.map(mapModule),
     scenarios: scenarios.map(mapScenario),
+    groups:   groups.map(mapGroup),
   };
 }
 
