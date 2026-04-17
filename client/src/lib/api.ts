@@ -25,8 +25,14 @@ export interface TestStep {
   expected?: string;
   description?: string;
 }
+export interface ScenarioGroup {
+  id: string; moduleId: string; parentId?: string;
+  name: string; sortOrder: number;
+  createdAt: string; updatedAt: string;
+}
 export interface Scenario {
-  id: string; moduleId: string; assigneeId?: string; roleId?: string;
+  id: string; caseNumber?: number; moduleId: string; groupId?: string;
+  assigneeId?: string; roleId?: string;
   testCaseId?: string; scenarioRefId?: string;
   name: string; url: string; testTypes: string[];
   description?: string; tags: string[];
@@ -72,6 +78,20 @@ export const updateModule = (id: string, data: Partial<Pick<Module, "name" | "de
   fetch(`/library/modules/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<Module>(r));
 export const deleteModule = (id: string) =>
   fetch(`/library/modules/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
+
+// Groups
+export const getGroups = (moduleId: string) =>
+  fetch(`/library/modules/${moduleId}/groups`).then(r => json<ScenarioGroup[]>(r));
+export const createGroup = (moduleId: string, data: { name: string; parentId?: string }) =>
+  fetch(`/library/modules/${moduleId}/groups`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<ScenarioGroup>(r));
+export const updateGroup = (id: string, data: { name?: string; sortOrder?: number }) =>
+  fetch(`/library/groups/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<ScenarioGroup>(r));
+export const moveGroup = (id: string, parentId: string | null) =>
+  fetch(`/library/groups/${id}/move`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parentId }) }).then(r => json<ScenarioGroup>(r));
+export const deleteGroup = (id: string) =>
+  fetch(`/library/groups/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
+export const moveScenario = (id: string, groupId: string | null) =>
+  fetch(`/library/scenarios/${id}/move`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId }) }).then(r => json<Scenario>(r));
 
 // Scenarios
 export const createScenario = (data: Omit<Scenario, "id" | "createdAt" | "updatedAt">) =>

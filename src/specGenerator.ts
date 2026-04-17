@@ -5,8 +5,11 @@ function buildAuthBeforeAll(): string {
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
     console.log('[AUTH] Navigating to login page:', AUTH_LOGIN_URL);
-    await page.goto(AUTH_LOGIN_URL);
+    await page.goto(AUTH_LOGIN_URL, { waitUntil: 'networkidle' });
     await page.screenshot({ path: 'test-results/auth-01-login-page.png' });
+
+    // Wait for any input to appear (SPA may render form after JS loads)
+    await page.waitForSelector('input', { timeout: 10000 });
 
     // Find email/username field — try common selectors in priority order
     const emailSelectors = [
@@ -17,6 +20,7 @@ function buildAuthBeforeAll(): string {
       'input[id*="email"]',
       'input[id*="user"]',
       'input[id*="login"]',
+      'input[type="text"]',
     ];
     let emailField = null;
     for (const sel of emailSelectors) {
