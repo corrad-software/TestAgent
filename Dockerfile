@@ -12,12 +12,15 @@ COPY client/package.json client/package-lock.json ./client/
 RUN npm ci --prefix client
 
 COPY prisma ./prisma
-COPY prisma.config.ts tsconfig.json playwright.config.ts ./
+COPY prisma.config.ts prisma.mysql.config.ts tsconfig.json playwright.config.ts ./
 COPY src ./src
 COPY client ./client
 COPY public ./public
 
-RUN npx prisma generate && npm run build
+# SQLite client (default) + MySQL client (src/db.ts); dummy URL — generate does not open a connection.
+RUN npx prisma generate \
+    && MYSQL_DATABASE_URL="mysql://build:build@127.0.0.1:3306/build" npx prisma generate --config prisma.mysql.config.ts \
+    && npm run build
 
 # ─── Production runtime ──────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS runner
@@ -33,10 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-COPY prisma.config.ts ./
+COPY prisma.config.ts prisma.mysql.config.ts ./
 
 RUN npm ci --omit=dev \
     && npx prisma generate \
+    && MYSQL_DATABASE_URL="mysql://build:build@127.0.0.1:3306/build" npx prisma generate --config prisma.mysql.config.ts \
     && npm rebuild better-sqlite3 \
     && npx playwright install-deps chromium \
     && npx playwright install chromium \
