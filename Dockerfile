@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+# Test Agent — API + React UI + Playwright runner
+
+# ─── Build API (tsc) + client (Vite) ─────────────────────────────────────────
+FROM node:20-bookworm AS builder
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY client/package.json client/package-lock.json ./client/
+RUN npm ci --prefix client
+
+COPY prisma ./prisma
+COPY prisma.config.ts tsconfig.json playwright.config.ts ./
+COPY src ./src
+COPY client ./client
+COPY public ./public
+
+RUN npx prisma generate && npm run build
+
+# ─── Production runtime ──────────────────────────────────────────────────────
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# better-sqlite3 needs a compile step; Playwright will add Chromium + OS libs via CLI below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+
+RUN npm ci --omit=dev \
+    && npx prisma generate \
+    && npm rebuild better-sqlite3 \
+    && npx playwright install-deps chromium \
+    && npx playwright install chromium \
+    && apt-get update && apt-get purge -y python3 make g++ \
+    && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/client/dist ./client/dist
+COPY playwright.config.ts ./
+COPY public ./public
+
+RUN mkdir -p data playwright-reports test-results generated-tests
+
+EXPOSE 4000
+ENV PORT=4000
+
+# Migrate SQLite/MySQL on boot, then start compiled server (not ts-node).
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/server.js"]
