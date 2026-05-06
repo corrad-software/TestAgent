@@ -197,10 +197,26 @@ export interface AppSettings {
   webhookUrl: string;
   webhookOnPass: boolean;
   webhookOnFail: boolean;
+  dbEnabled: boolean;
+  dbUrl: string;
+  dbUrlMasked: string;
+  dbActive: "mysql" | "sqlite";
+  dbLastError: string;
+}
+export interface DbTestResult {
+  ok: boolean;
+  active: "mysql" | "sqlite";
+  error?: string;
+  serverVersion?: string;
+  pingMs?: number;
 }
 export const getAppSettings = () => fetch("/app-settings").then(r => json<AppSettings>(r));
 export const updateAppSettings = (data: Partial<AppSettings>) =>
   fetch("/app-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(r => json<AppSettings>(r));
+export const testDbConnection = (dbUrl?: string) =>
+  fetch("/app-settings/db/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dbUrl }) }).then(r => json<DbTestResult>(r));
+export const reconnectDb = () =>
+  fetch("/app-settings/db/reconnect", { method: "POST" }).then(r => json<DbTestResult>(r));
 
 // Import — accepts .xlsx/.csv and/or .tc (Katalon) + optional .groovy companions
 export const importScenarios = (files: File | File[], opts?: { module?: string; defaultUrl?: string; projectId?: string }) => {

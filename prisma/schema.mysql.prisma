@@ -1,0 +1,147 @@
+// MySQL mirror of schema.prisma. Used when Database tab is set to MySQL.
+// Generated client lives at prisma/generated/mysql-client to avoid colliding
+// with the default SQLite client at node_modules/@prisma/client.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../prisma/generated/mysql-client"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  modules      Module[]
+  members      Member[]
+  roles        ProjectRole[]
+  environments Environment[]
+}
+
+model Environment {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  baseUrl   String
+  authConfig String?  @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
+}
+
+model Member {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  email     String
+  role      String   @default("Tester")
+  avatarUrl String?
+  createdAt DateTime @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenarios Scenario[] @relation("ScenarioAssignee")
+
+  @@unique([projectId, email])
+}
+
+model Module {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenarios      Scenario[]
+  scenarioGroups ScenarioGroup[]
+}
+
+model ScenarioGroup {
+  id        String   @id @default(cuid())
+  moduleId  String
+  parentId  String?
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  module    Module          @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  parent    ScenarioGroup?  @relation("GroupChildren", fields: [parentId], references: [id])
+  children  ScenarioGroup[] @relation("GroupChildren")
+  scenarios Scenario[]
+}
+
+model Scenario {
+  id            String   @id @default(cuid())
+  caseNumber    Int?
+  moduleId      String
+  groupId       String?
+  assigneeId    String?
+  roleId        String?
+  testCaseId    String?
+  scenarioRefId String?
+  name          String
+  url           String
+  testTypes     String
+  description   String?  @db.Text
+  tags          String   @default("[]") @db.VarChar(2000)
+  authConfig    String?  @db.Text
+  customSpec    String?  @db.LongText
+  testSteps     String?  @db.LongText
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  module   Module         @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  group    ScenarioGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  assignee Member?        @relation("ScenarioAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  role     ProjectRole?   @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  runs     RunRecord[]
+}
+
+model ProjectRole {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  color     String   @default("gray")
+  createdAt DateTime @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenarios Scenario[]
+
+  @@unique([projectId, name])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("Admin")
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model RunRecord {
+  id         String   @id @default(cuid())
+  scenarioId String
+  runAt      DateTime @default(now())
+  passed     Boolean
+  summary    String   @db.Text
+  reportId   String?
+  durationMs Int
+  logs       String?  @db.LongText
+  runBy      String?
+
+  scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+}

@@ -798,17 +798,14 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
   onRefresh: () => void;
 }) {
   const [running, setRunning]     = useState(false);
-  const [recording, setRecording] = useState(false);
   const [logs, setLogs]           = useState<string[]>([]);
   const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
-  const [recordedCode, setRecordedCode] = useState<string | null>(s.customSpec ?? null);
-  const [runMode, setRunMode]           = useState<"recorded" | "steps">(
-    s.testSteps?.length ? "steps" : "recorded"
+  const [recordedCode]            = useState<string | null>(s.customSpec ?? null);
+  const [runMode, setRunMode]     = useState<"ai" | "steps" | "recorded">(
+    s.testSteps?.length ? "steps" : s.customSpec ? "recorded" : "ai"
   );
-  const [showCode, setShowCode]         = useState(false);
   const [showSteps, setShowSteps]       = useState(false);
-  const [enriching, setEnriching]       = useState(false);
   const [logTab, setLogTab]             = useState<"live" | "history">("live");
   const [selectedEnvId, setSelectedEnvId] = useState<string>("");
   const logRef = useRef<HTMLDivElement>(null);
@@ -850,7 +847,7 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
         body: JSON.stringify({
           headed,
           useCustomSpec: runMode === "recorded" && !!recordedCode,
-          useTestSteps: runMode === "steps",
+          useTestSteps: runMode === "steps" && !!(s.testSteps?.length),
           environmentId: selectedEnvId || undefined,
         }),
       });
@@ -891,93 +888,6 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
     }
   }
 
-  async function record() {
-    setRecording(true);
-    setResult(null);
-    setLogTab("live");
-    setLogs(["🎬 Starting Playwright Recorder..."]);
-    try {
-      const res = await fetch(`/library/scenarios/${s.id}/record`, { method: "POST" });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
-        for (const part of parts) {
-          if (!part.startsWith("data:")) continue;
-          try {
-            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log") setLogs(prev => [...prev, ev.message]);
-            if (ev.type === "codeGenerated" && ev.code) {
-              setRecordedCode(ev.code);
-              setShowCode(true);
-              // Auto-save to DB
-              await fetch(`/library/scenarios/${s.id}/custom-spec`, {
-                method: "PUT", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ customSpec: ev.code }),
-              });
-              setRunMode("recorded");
-              onRefresh();
-            }
-            if (ev.type === "recordEnd") {
-              setLogs(prev => [...prev, "🎬 Recording session ended"]);
-            }
-          } catch { /* skip */ }
-        }
-      }
-    } catch (err) {
-      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
-    } finally {
-      setRecording(false);
-    }
-  }
-
-  async function deleteCustomSpec() {
-    if (!confirm("Delete the recorded spec? This cannot be undone.")) return;
-    await fetch(`/library/scenarios/${s.id}/custom-spec`, { method: "DELETE" });
-    setRecordedCode(null);
-    setRunMode("recorded");
-    setShowCode(false);
-    onRefresh();
-  }
-
-  async function enrichWithAI() {
-    setEnriching(true);
-    setLogTab("live");
-    setLogs(["✨ Asking AI to add assertions to recorded spec..."]);
-    try {
-      const res = await fetch(`/library/scenarios/${s.id}/enrich`, { method: "POST" });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
-        for (const part of parts) {
-          if (!part.startsWith("data:")) continue;
-          try {
-            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log") setLogs(prev => [...prev, ev.message]);
-            if (ev.type === "enriched" && ev.code) {
-              setRecordedCode(ev.code);
-              setLogs(prev => [...prev, "✅ Assertions added and saved"]);
-              onRefresh();
-            }
-            if (ev.type === "error") setLogs(prev => [...prev, `❌ ${ev.message}`]);
-          } catch {}
-        }
-      }
-    } catch (err) {
-      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
-    } finally {
-      setEnriching(false);
-    }
-  }
 
   const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
   const effectiveReportUrl = reportUrl ?? lastReportUrl;
@@ -1104,84 +1014,95 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
               </div>
             )}
 
-            {/* Run mode toggle — only shown when test steps also exist alongside recorded spec */}
-            {recordedCode && s.testSteps && s.testSteps.length > 0 && (
-              <div className="flex items-center gap-0.5 bg-gray-950 rounded-lg p-0.5">
-                <button onClick={() => setRunMode("recorded")}
-                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "recorded" ? "bg-red-500/20 text-red-300" : "text-gray-500 hover:text-gray-300"}`}>
-                  Recorded
+            {/* ── Test source selector ─────────────────────────────────── */}
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">Run using</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {/* Auto / template */}
+                <button
+                  onClick={() => setRunMode("ai")}
+                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
+                    ${runMode === "ai"
+                      ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
+                      : "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"}`}
+                >
+                  <span className="text-base leading-none">⚡</span>
+                  <span className="text-[10px] font-semibold leading-tight">Auto</span>
+                  <span className="text-[9px] text-gray-600 leading-tight">generated spec</span>
                 </button>
-                <button onClick={() => setRunMode("steps")}
-                  className={`flex-1 text-xs py-1.5 rounded-md transition font-medium ${runMode === "steps" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
-                  Steps
+
+                {/* Test Steps */}
+                <button
+                  onClick={() => s.testSteps?.length && setRunMode("steps")}
+                  disabled={!s.testSteps?.length}
+                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
+                    ${runMode === "steps"
+                      ? "border-blue-500 bg-blue-500/10 text-blue-300"
+                      : s.testSteps?.length
+                        ? "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"
+                        : "border-gray-900 bg-gray-950/50 text-gray-700 cursor-not-allowed"}`}
+                >
+                  <span className="text-base leading-none">📋</span>
+                  <span className="text-[10px] font-semibold leading-tight">Steps</span>
+                  <span className="text-[9px] text-gray-600 leading-tight">
+                    {s.testSteps?.length ? `${s.testSteps.length} steps` : "none added"}
+                  </span>
+                </button>
+
+                {/* Recorded spec */}
+                <button
+                  onClick={() => recordedCode && setRunMode("recorded")}
+                  disabled={!recordedCode}
+                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
+                    ${runMode === "recorded"
+                      ? "border-red-500 bg-red-500/10 text-red-300"
+                      : recordedCode
+                        ? "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"
+                        : "border-gray-900 bg-gray-950/50 text-gray-700 cursor-not-allowed"}`}
+                >
+                  <span className="text-base leading-none">🎬</span>
+                  <span className="text-[10px] font-semibold leading-tight">Recorded</span>
+                  <span className="text-[9px] text-gray-600 leading-tight">
+                    {recordedCode ? `${recordedCode.split("\n").length} lines` : "not recorded"}
+                  </span>
                 </button>
               </div>
-            )}
 
-            {/* Run buttons */}
-            <div className="flex gap-2 relative group/run">
-              <button onClick={() => run(false)} disabled={running || recording}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2 rounded-lg transition"
-                title="Headless — runs in background, faster and uses less resources. Best for automated testing.">
-                {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Headless{runMode === "steps" ? " (Steps)" : ""}
-              </button>
-              <button onClick={() => run(true)} disabled={running || recording}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white py-2 rounded-lg transition"
-                title="Visible Browser — opens a real browser window so you can watch the test run. Useful for debugging and verifying test steps.">
-                <Monitor className="w-3.5 h-3.5" />
-                Visible{runMode === "steps" ? " (Steps)" : ""}
-              </button>
+              {/* Source hint */}
+              <p className="text-[10px] text-gray-600 leading-snug">
+                {runMode === "ai"    && "Runs a generated Playwright spec based on the selected test types. No setup required."}
+                {runMode === "steps" && "Runs the structured test steps you defined in this scenario."}
+                {runMode === "recorded" && "Replays your Playwright recording. Fastest and most deterministic."}
+              </p>
             </div>
 
-            {/* Record button */}
-            <button onClick={record} disabled={running || recording}
-              className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 disabled:opacity-50 text-red-400 py-2 rounded-lg transition">
-              {recording ? (
-                <><Loader className="w-3.5 h-3.5 animate-spin" /> Recording...</>
-              ) : (
-                <><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Record</>
-              )}
-            </button>
-
-            {/* Recorded spec viewer */}
-            {recordedCode && (
-              <div className="space-y-1.5">
-                <button onClick={() => setShowCode(!showCode)}
-                  className="text-xs text-gray-500 hover:text-gray-300 transition flex items-center gap-1">
-                  {showCode ? "▾" : "▸"} Recorded Spec ({recordedCode.split("\n").length} lines)
+            {/* ── Run buttons ──────────────────────────────────────────── */}
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <button onClick={() => run(false)} disabled={running}
+                  className="flex-1 flex flex-col items-center justify-center gap-0.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2.5 rounded-lg transition">
+                  <span className="flex items-center gap-1.5">
+                    {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    Run (Headless)
+                  </span>
+                  <span className="text-[9px] font-normal opacity-70">background, faster</span>
                 </button>
-                {showCode && (
-                  <div className="space-y-1.5">
-                    <textarea
-                      value={recordedCode}
-                      onChange={e => setRecordedCode(e.target.value)}
-                      spellCheck={false}
-                      className="w-full text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 h-40 overflow-auto resize-y outline-none focus:border-emerald-500 transition"
-                    />
-                    <div className="flex gap-1.5">
-                      <button onClick={async () => {
-                        await fetch(`/library/scenarios/${s.id}/custom-spec`, {
-                          method: "PUT", headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ customSpec: recordedCode }),
-                        });
-                        onRefresh();
-                        setLogs(prev => [...prev, "✅ Spec saved"]);
-                      }} className="flex-1 flex items-center justify-center gap-1 text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 py-1.5 rounded-lg transition">
-                        Save Spec
-                      </button>
-                      <button onClick={enrichWithAI} disabled={enriching || running || recording}
-                        className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 disabled:opacity-50 text-violet-400 py-1.5 rounded-lg transition">
-                        {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding...</> : "✨ AI Assertions"}
-                      </button>
-                      <button onClick={deleteCustomSpec}
-                        className="flex items-center justify-center text-xs text-gray-600 hover:text-red-400 px-2 py-1.5 rounded-lg transition" title="Delete spec">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                )}
+                <button onClick={() => run(true)} disabled={running}
+                  className="flex-1 flex flex-col items-center justify-center gap-0.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white py-2.5 rounded-lg transition">
+                  <span className="flex items-center gap-1.5">
+                    <Monitor className="w-3.5 h-3.5" />
+                    Run (Visible)
+                  </span>
+                  <span className="text-[9px] font-normal opacity-70">opens browser window</span>
+                </button>
               </div>
+            </div>
+
+            {/* Hint to configure recording via Edit */}
+            {!recordedCode && (
+              <p className="text-[10px] text-gray-700 leading-snug text-center">
+                To record a Playwright spec, open <button onClick={onEdit} className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition">Edit Scenario</button> → Test Design.
+              </p>
             )}
 
             {/* Test steps viewer */}
@@ -1599,6 +1520,93 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
   // Test steps state
   const [testSteps, setTestSteps] = useState<api.TestStep[]>(scenario?.testSteps ?? []);
 
+  // Recorded spec state (only meaningful for existing scenarios that have an id)
+  const [recordedCode, setRecordedCode]   = useState<string | null>(scenario?.customSpec ?? null);
+  const [recording,    setRecording]      = useState(false);
+  const [recordLogs,   setRecordLogs]     = useState<string[]>([]);
+  const [showSpecCode, setShowSpecCode]   = useState(false);
+  const [enriching,    setEnriching]      = useState(false);
+
+  async function recordSpec() {
+    if (!scenario?.id) return;
+    setRecording(true);
+    setRecordLogs(["🎬 Starting Playwright Recorder..."]);
+    try {
+      const res = await fetch(`/library/scenarios/${scenario.id}/record`, { method: "POST" });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "log") setRecordLogs(p => [...p, ev.message]);
+            if (ev.type === "codeGenerated" && ev.code) {
+              setRecordedCode(ev.code);
+              setShowSpecCode(true);
+              await fetch(`/library/scenarios/${scenario.id}/custom-spec`, {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ customSpec: ev.code }),
+              });
+            }
+            if (ev.type === "recordEnd") setRecordLogs(p => [...p, "🎬 Recording session ended"]);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setRecordLogs(p => [...p, `❌ ${(err as Error).message}`]);
+    } finally {
+      setRecording(false);
+    }
+  }
+
+  async function enrichSpec() {
+    if (!scenario?.id) return;
+    setEnriching(true);
+    setRecordLogs(["✨ Asking AI to add assertions..."]);
+    try {
+      const res = await fetch(`/library/scenarios/${scenario.id}/enrich`, { method: "POST" });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "log") setRecordLogs(p => [...p, ev.message]);
+            if (ev.type === "enriched" && ev.code) {
+              setRecordedCode(ev.code);
+              setRecordLogs(p => [...p, "✅ Assertions added and saved"]);
+            }
+            if (ev.type === "error") setRecordLogs(p => [...p, `❌ ${ev.message}`]);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setRecordLogs(p => [...p, `❌ ${(err as Error).message}`]);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  async function deleteSpec() {
+    if (!scenario?.id || !confirm("Delete the recorded spec? This cannot be undone.")) return;
+    await fetch(`/library/scenarios/${scenario.id}/custom-spec`, { method: "DELETE" });
+    setRecordedCode(null);
+    setShowSpecCode(false);
+    setRecordLogs([]);
+  }
+
   // Snapshot of last saved values for dirty tracking
   const [snapshot, setSnapshot] = useState(() => getFormValues());
 
@@ -1813,6 +1821,99 @@ function ScenarioModal({ scenario, project, members, roles, defaultModuleId, sav
                   <span className="text-[10px] text-gray-600">— structured step-by-step actions (optional, Katalon-style)</span>
                 </div>
                 <TestStepsEditor steps={testSteps} onChange={setTestSteps} scenarioUrl={url || "https://example.com"} />
+              </div>
+
+              {/* ── Spec Recording ─────────────────────────────────────────── */}
+              <div className="border-t border-gray-800 pt-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base leading-none">🎬</span>
+                  <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-widest">Playwright Recording</h3>
+                  <span className="text-[10px] text-gray-600">— optional; record once, replay on every run</span>
+                </div>
+
+                {!scenario?.id ? (
+                  <div className="bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 text-xs text-gray-600">
+                    Save this scenario first, then reopen it to record a Playwright spec.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {/* Status + action row */}
+                    <div className="flex items-center gap-2">
+                      <div className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
+                        recordedCode
+                          ? "border-red-500/30 bg-red-500/5 text-red-300"
+                          : "border-gray-800 bg-gray-950 text-gray-600"
+                      }`}>
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${recordedCode ? "bg-red-500" : "bg-gray-700"}`} />
+                        {recordedCode
+                          ? `Spec recorded — ${recordedCode.split("\n").length} lines`
+                          : "No spec recorded yet"}
+                      </div>
+                      <button
+                        onClick={recordSpec}
+                        disabled={recording || enriching}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-400 text-xs font-semibold transition">
+                        {recording
+                          ? <><Loader className="w-3.5 h-3.5 animate-spin" /> Recording...</>
+                          : <><span className="w-2 h-2 rounded-full bg-red-500 shrink-0" /> {recordedCode ? "Re-record" : "Record"}</>}
+                      </button>
+                      {recordedCode && (
+                        <>
+                          <button
+                            onClick={enrichSpec}
+                            disabled={recording || enriching}
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 disabled:opacity-50 text-violet-400 text-xs font-semibold transition">
+                            {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding...</> : "✨ AI Assertions"}
+                          </button>
+                          <button
+                            onClick={deleteSpec}
+                            disabled={recording || enriching}
+                            className="p-2 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition" title="Delete spec">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Spec code viewer/editor */}
+                    {recordedCode && (
+                      <div className="space-y-1.5">
+                        <button onClick={() => setShowSpecCode(v => !v)}
+                          className="text-[10px] text-gray-600 hover:text-gray-400 transition flex items-center gap-1">
+                          {showSpecCode ? "▾" : "▸"} {showSpecCode ? "Hide" : "View"} spec code
+                        </button>
+                        {showSpecCode && (
+                          <div className="space-y-1.5">
+                            <textarea
+                              value={recordedCode}
+                              onChange={e => setRecordedCode(e.target.value)}
+                              spellCheck={false}
+                              className="w-full text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 h-40 resize-y outline-none focus:border-emerald-500 transition"
+                            />
+                            <button onClick={async () => {
+                              await fetch(`/library/scenarios/${scenario.id}/custom-spec`, {
+                                method: "PUT", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ customSpec: recordedCode }),
+                              });
+                              setRecordLogs(["✅ Spec saved"]);
+                            }} className="flex items-center gap-1 text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-3 py-1.5 rounded-lg transition">
+                              Save Spec
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Live record log */}
+                    {recordLogs.length > 0 && (
+                      <div className="bg-gray-950 border border-gray-800 rounded-lg p-2.5 space-y-0.5 max-h-24 overflow-y-auto">
+                        {recordLogs.map((l, i) => (
+                          <p key={i} className="text-[10px] font-mono text-gray-500">{l}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

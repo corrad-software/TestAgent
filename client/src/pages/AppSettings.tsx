@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bot, Sliders, FileText, Bell, Eye, EyeOff,
-  CheckCircle2, AlertCircle, Save,
+  CheckCircle2, AlertCircle, Save, Database, Loader2, Plug,
 } from "lucide-react";
 import * as api from "../lib/api";
 import { SUITE_LABELS } from "../lib/utils";
 
-type Tab = "ai" | "defaults" | "reports" | "notifications";
+type Tab = "ai" | "defaults" | "reports" | "notifications" | "database";
 
 const MODELS = [
   { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (recommended)" },
@@ -35,10 +35,13 @@ export default function AppSettings() {
   const [tab, setTab] = useState<Tab>("ai");
   const [form, setForm] = useState<Partial<api.AppSettings>>({});
   const [showKey, setShowKey] = useState(false);
+  const [showDbUrl, setShowDbUrl] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [dbTesting, setDbTesting] = useState(false);
+  const [dbTestResult, setDbTestResult] = useState<api.DbTestResult | null>(null);
 
-  const { data: settings } = useQuery<api.AppSettings>({
+  const { data: settings, error: loadError } = useQuery<api.AppSettings>({
     queryKey: ["app-settings"],
     queryFn: api.getAppSettings,
   });
@@ -62,9 +65,22 @@ export default function AppSettings() {
   const set = (key: keyof api.AppSettings, value: unknown) =>
     setForm(f => ({ ...f, [key]: value }));
 
+  const handleTestDb = async () => {
+    setDbTesting(true);
+    setDbTestResult(null);
+    try {
+      const result = await api.testDbConnection(form.dbUrl);
+      setDbTestResult(result);
+    } catch (e) {
+      setDbTestResult({ ok: false, active: "sqlite", error: (e as Error).message });
+    } finally {
+      setDbTesting(false);
+    }
+  };
+
   const handleSave = () => {
-    // Strip the masked display field — never send it back
-    const { anthropicApiKeyMasked: _, ...patch } = form as api.AppSettings;
+    // Strip the masked display fields — never send them back
+    const { anthropicApiKeyMasked: _m, dbUrlMasked: _d, ...patch } = form as api.AppSettings;
     // If key field is empty and we didn't type a new one, omit it
     const toSend: Partial<api.AppSettings> = { ...patch };
     if (!toSend.anthropicApiKey) delete toSend.anthropicApiKey;
@@ -107,6 +123,7 @@ export default function AppSettings() {
           { id: "defaults" as Tab,      icon: Sliders,  label: "Test Defaults" },
           { id: "reports" as Tab,       icon: FileText, label: "Reports" },
           { id: "notifications" as Tab, icon: Bell,     label: "Notifications" },
+          { id: "database" as Tab,      icon: Database, label: "Database" },
         ]).map(({ id, icon: Icon, label }) => (
           <button
             key={id}
@@ -124,6 +141,11 @@ export default function AppSettings() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
+        {loadError && (
+          <div className="max-w-xl mb-4 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
+            Failed to load settings: {loadError.message}. Make sure you are logged in as an Admin.
+          </div>
+        )}
         <div className="max-w-xl space-y-6">
 
             {/* ── AI Configuration ───────────────────────────────────────── */}
@@ -328,6 +350,103 @@ export default function AppSettings() {
                 {!form.webhookUrl && (
                   <InfoBox>Enter a webhook URL above to enable notifications.</InfoBox>
                 )}
+              </>
+            )}
+
+            {/* ── Database ───────────────────────────────────────────────── */}
+            {tab === "database" && (
+              <>
+                <SectionHeader title="Database" desc="Configure the primary database. SQLite stays as the fallback so the app keeps running if your DB is unreachable." />
+
+                <Field label="Use external database" hint="When off, the app runs on the local SQLite file.">
+                  <div className="flex gap-3">
+                    {[
+                      { val: false, label: "SQLite (local)", desc: "Default, no setup needed" },
+                      { val: true,  label: "MySQL",          desc: "Use the URL below as primary" },
+                    ].map(opt => (
+                      <button
+                        key={String(opt.val)}
+                        onClick={() => set("dbEnabled", opt.val)}
+                        className={`flex-1 border rounded-lg px-3 py-2.5 text-left transition
+                          ${form.dbEnabled === opt.val
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
+                            : "border-gray-700 bg-gray-950 text-gray-400 hover:border-emerald-500/60"}`}
+                      >
+                        <p className="text-sm font-medium">{opt.label}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                <Field label="Connection URL" hint="Format: mysql://user:password@host:port/database">
+                  <div className="relative">
+                    <input
+                      type={showDbUrl ? "text" : "password"}
+                      value={form.dbUrl ?? ""}
+                      onChange={e => set("dbUrl", e.target.value)}
+                      placeholder="mysql://user:password@host:3306/dbname"
+                      className={inputCls + " pr-10 font-mono"}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDbUrl(s => !s)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition"
+                    >
+                      {showDbUrl ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  {settings?.dbUrlMasked && (
+                    <p className="text-xs text-gray-600 mt-1 break-all">Saved: {settings.dbUrlMasked}</p>
+                  )}
+                </Field>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleTestDb}
+                    disabled={dbTesting || !form.dbUrl}
+                    className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-xs font-semibold px-3 py-2 rounded-lg transition border border-gray-700"
+                  >
+                    {dbTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+                    {dbTesting ? "Testing…" : "Test Connection"}
+                  </button>
+                  {dbTestResult && (dbTestResult.ok
+                    ? (
+                      <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Connected{dbTestResult.serverVersion ? ` (MySQL ${dbTestResult.serverVersion})` : ""} · {dbTestResult.pingMs}ms
+                      </span>
+                    )
+                    : (
+                      <span className="flex items-center gap-1.5 text-xs text-red-400">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        {dbTestResult.error || "Connection failed"}
+                      </span>
+                    )
+                  )}
+                </div>
+
+                <Field label="Status">
+                  <div className={`rounded-lg border px-4 py-3 text-xs ${
+                    settings?.dbActive === "mysql"
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  }`}>
+                    <div className="flex items-center gap-2 font-medium">
+                      <Database className="w-3.5 h-3.5" />
+                      Currently active: {settings?.dbActive === "mysql" ? "MySQL" : "SQLite (fallback)"}
+                    </div>
+                    {settings?.dbLastError && (
+                      <p className="mt-1.5 text-red-400">Last error: {settings.dbLastError}</p>
+                    )}
+                  </div>
+                </Field>
+
+                <InfoBox>
+                  <strong className="text-gray-300">How it works:</strong> on startup the app probes your MySQL URL.
+                  If it's unreachable, the app keeps running on SQLite — your data stays in <code className="text-emerald-400">data/testAgent.db</code>.
+                  Fix the MySQL connection, then click <em>Test Connection</em> and Save to switch back.
+                </InfoBox>
               </>
             )}
 

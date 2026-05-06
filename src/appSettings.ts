@@ -22,6 +22,11 @@ export interface AppSettings {
   webhookUrl: string;
   webhookOnPass: boolean;
   webhookOnFail: boolean;
+  // Database
+  dbEnabled: boolean;          // when true, app tries the configured DB; falls back to SQLite on failure
+  dbUrl: string;               // e.g. mysql://user:pass@host:port/dbname
+  dbActive: "mysql" | "sqlite"; // last-known active backend (informational)
+  dbLastError: string;         // last connection error, if any
 }
 
 const DEFAULTS: AppSettings = {
@@ -38,6 +43,10 @@ const DEFAULTS: AppSettings = {
   webhookUrl: "",
   webhookOnPass: false,
   webhookOnFail: true,
+  dbEnabled: false,
+  dbUrl: "mysql://kerisi:kerisi123@43.217.187.42:4151/testagent",
+  dbActive: "sqlite",
+  dbLastError: "",
 };
 
 let cache: AppSettings | null = null;
@@ -67,10 +76,21 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Ap
 }
 
 /** Strip the API key before sending to client (mask it) */
-export function maskSettings(s: AppSettings): AppSettings & { anthropicApiKeyMasked: string } {
+export function maskSettings(s: AppSettings): AppSettings & { anthropicApiKeyMasked: string; dbUrlMasked: string } {
   const key = s.anthropicApiKey;
   const masked = key.length > 8
     ? key.slice(0, 7) + "•".repeat(Math.min(key.length - 11, 20)) + key.slice(-4)
     : key ? "•".repeat(key.length) : "";
-  return { ...s, anthropicApiKey: "", anthropicApiKeyMasked: masked };
+  return { ...s, anthropicApiKey: "", anthropicApiKeyMasked: masked, dbUrlMasked: maskDbUrl(s.dbUrl) };
+}
+
+function maskDbUrl(url: string): string {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.password) u.password = "•••••";
+    return u.toString();
+  } catch {
+    return url;
+  }
 }

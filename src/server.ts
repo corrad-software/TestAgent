@@ -9,8 +9,9 @@ import multer from "multer";
 import * as XLSX from "xlsx";
 import { runBasicTest } from "./basicTest";
 import { getAppSettings, updateAppSettings, maskSettings } from "./appSettings";
+import { testMysqlConnection, probeConfiguredDb } from "./dbConnection";
 import { requireAuth, requireAdmin, hashPassword, verifyPassword, signToken, seedAdminIfNeeded, COOKIE_NAME, COOKIE_OPTS } from "./auth";
-import { prisma } from "./db";
+import { prisma, initDb, getActiveBackend } from "./db";
 import { generateSpec, injectAuthIntoSpec } from "./specGenerator";
 import { stepsToPlaywrightSpec } from "./stepsToSpec";
 import { runPlaywrightTest } from "./testRunner";
@@ -500,7 +501,31 @@ app.get("/app-settings",  requireAdmin, async (_req, res) => {
 });
 
 app.put("/app-settings", requireAdmin, async (req, res) => {
-  try { res.json(maskSettings(await updateAppSettings(req.body))); }
+  try {
+    const updated = await updateAppSettings(req.body);
+    // If the DB config changed, re-probe so dbActive/dbLastError reflect reality.
+    if (req.body && ("dbEnabled" in req.body || "dbUrl" in req.body)) {
+      await probeConfiguredDb();
+    }
+    res.json(maskSettings(await getAppSettings()));
+    void updated;
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Test the configured DB connection without persisting changes. Body may
+// supply { dbUrl } to test an unsaved value; otherwise tests the saved one.
+app.post("/app-settings/db/test", requireAdmin, async (req, res) => {
+  try {
+    const url = (req.body?.dbUrl as string) || (await getAppSettings()).dbUrl;
+    const result = await testMysqlConnection(url);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Re-run the startup probe (e.g. after the user fixes their MySQL) and
+// update dbActive / dbLastError in settings.
+app.post("/app-settings/db/reconnect", requireAdmin, async (_req, res) => {
+  try { res.json(await probeConfiguredDb()); }
   catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -1232,6 +1257,14 @@ app.post("/library/import", upload.array("files", 100), async (req, res) => {
 });
 
 const PORT = Number(process.env.PORT ?? 4000);
-seedAdminIfNeeded(prisma).then(() => {
-  app.listen(PORT, () => console.log(`TestAgent API → http://localhost:${PORT}`));
-});
+initDb()
+  .then(() => seedAdminIfNeeded(prisma))
+  .then(() => {
+    app.listen(PORT, () => console.log(`TestAgent API → http://localhost:${PORT} (db: ${getActiveBackend()})`));
+    // Reflect active backend into app-settings (status card).
+    probeConfiguredDb().catch(err => console.warn("[db] probe error:", err));
+  })
+  .catch(err => {
+    console.error("[boot] DB init failed:", err);
+    process.exit(1);
+  });
