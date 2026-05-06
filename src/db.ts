@@ -22,9 +22,18 @@ export type ActiveBackend = "mysql" | "sqlite";
 let _active: ActiveBackend = "sqlite";
 export const getActiveBackend = (): ActiveBackend => _active;
 
+function sqliteFileUrl(): string {
+  const pick = (v: string | undefined) =>
+    v?.trim().startsWith("file:") ? v.trim() : undefined;
+  return (
+    pick(process.env["SQLITE_DATABASE_URL"]) ??
+    pick(process.env["DATABASE_URL"]) ??
+    `file:${path.join(process.cwd(), "data/testAgent.db")}`
+  );
+}
+
 function makeSqliteClient(): PrismaClient {
-  const dbUrl = process.env.DATABASE_URL
-    ?? `file:${path.join(process.cwd(), "data/testAgent.db")}`;
+  const dbUrl = sqliteFileUrl();
   const adapter = new PrismaBetterSqlite3({ url: dbUrl });
   return new PrismaClient({ adapter } as any);
 }
