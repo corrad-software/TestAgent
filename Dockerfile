@@ -50,6 +50,9 @@ RUN npm ci --omit=dev \
 
 COPY --from=builder /srv/app/dist ./dist
 COPY --from=builder /srv/app/client/dist ./client/dist
+COPY --from=builder /srv/app/scripts ./scripts
+COPY --from=builder /srv/app/src ./src
+COPY --from=builder /srv/app/tsconfig.json ./tsconfig.json
 COPY playwright.config.ts ./
 COPY public ./public
 
