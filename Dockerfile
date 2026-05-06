@@ -15,6 +15,7 @@ RUN npm ci --prefix client
 COPY prisma ./prisma
 COPY prisma.config.ts prisma.mysql.config.ts tsconfig.json playwright.config.ts ./
 COPY src ./src
+COPY scripts ./scripts
 COPY client ./client
 COPY public ./public
 
