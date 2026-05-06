@@ -62,20 +62,29 @@ function readDbSettingsSync(): { dbEnabled: boolean; dbUrl: string } | null {
   }
 }
 
+function mysqlUrlForRuntime(): string | null {
+  const cfg = readDbSettingsSync();
+  if (cfg && !cfg.dbEnabled) return null;
+  const fromSettings = cfg?.dbEnabled && cfg.dbUrl.trim() ? cfg.dbUrl.trim() : null;
+  if (fromSettings) return fromSettings;
+  const envUrl = process.env["DATABASE_URL"]?.trim();
+  if (envUrl && /^(mysql|mariadb):\/\//i.test(envUrl)) return envUrl;
+  return null;
+}
+
 /**
- * Pick the DB at boot. If MySQL is configured & enabled, try a connectivity probe;
- * on failure, fall back to SQLite so the app stays up.
+ * Pick the DB at boot. MySQL URL: App Settings (dbEnabled + dbUrl), else DATABASE_URL if mysql/mariadb.
+ * Prisma SQLite migrate still uses a file: URL only (see prisma.config.ts).
  */
 export async function initDb(): Promise<ActiveBackend> {
-  const cfg = readDbSettingsSync();
-  if (cfg?.dbEnabled && cfg.dbUrl) {
+  const mysqlUrl = mysqlUrlForRuntime();
+  if (mysqlUrl) {
     try {
-      // Probe with a lightweight mysql2 ping before instantiating Prisma.
       const mysql = await import("mysql2/promise");
-      const conn = await mysql.createConnection({ uri: cfg.dbUrl, connectTimeout: 3000 });
+      const conn = await mysql.createConnection({ uri: mysqlUrl, connectTimeout: 3000 });
       await conn.query("SELECT 1");
       await conn.end();
-      _client = await makeMysqlClient(cfg.dbUrl);
+      _client = await makeMysqlClient(mysqlUrl);
       _active = "mysql";
       console.log("[db] active backend: MySQL");
       return _active;

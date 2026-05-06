@@ -3,7 +3,8 @@
 
 # ─── Build API (tsc) + client (Vite) ─────────────────────────────────────────
 FROM node:20-bookworm AS builder
-WORKDIR /app
+# Avoid /app — some PaaS default volume mounts wipe /app and hide baked dist/node_modules.
+WORKDIR /srv/app
 
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -24,7 +25,7 @@ RUN npx prisma generate \
 
 # ─── Production runtime ──────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS runner
-WORKDIR /app
+WORKDIR /srv/app
 
 ENV NODE_ENV=production
 
@@ -47,8 +48,8 @@ RUN npm ci --omit=dev \
     && apt-get update && apt-get purge -y python3 make g++ \
     && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/client/dist ./client/dist
+COPY --from=builder /srv/app/dist ./dist
+COPY --from=builder /srv/app/client/dist ./client/dist
 COPY playwright.config.ts ./
 COPY public ./public
 
