@@ -30,13 +30,12 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
   const steps: string[] = [];
   const log = (msg: string) => { steps.push(msg); onLog(msg); };
 
+  // Relative path from project root — unambiguous, works across Playwright versions.
+  const specRelative = path.relative(cwd, specPath);
   const modeLabel = headed ? "headed (visible browser)" : "headless";
-  log(`🔧 Running: npx playwright test ${path.basename(specPath)} [${modeLabel}]`);
+  log(`🔧 Running: npx playwright test ${specRelative} [${modeLabel}]`);
 
-  // Pass only the filename — Playwright resolves it against testDir.
-  // Passing an absolute path causes "No tests found" when it doesn't
-  // match the configured testDir pattern.
-  const args = ["playwright", "test", path.basename(specPath)];
+  const args = ["playwright", "test", specRelative];
   if (headed) args.push("--headed");
 
   const exitCode = await new Promise<number>((resolve) => {

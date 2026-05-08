@@ -6,7 +6,8 @@ const htmlOutputDir = process.env.PW_HTML_REPORT
   : path.resolve(process.cwd(), "playwright-report");
 
 export default defineConfig({
-  testDir: "./generated-tests",
+  testDir: ".",
+  testMatch: "generated-tests/**/*.spec.ts",
   retries: 0,
   workers: 1,
   timeout: 60_000,
