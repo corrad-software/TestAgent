@@ -205,7 +205,10 @@ app.put("/users/:id", requireAdmin, async (req, res) => {
       select: { id: true, email: true, name: true, role: true, avatarUrl: true, createdAt: true, updatedAt: true },
     });
     res.json(user);
-  } catch { res.status(404).json({ error: "User not found" }); }
+  } catch (err: any) {
+    const notFound = err?.code === "P2025";
+    res.status(notFound ? 404 : 500).json({ error: notFound ? "User not found" : (err?.message ?? "Failed to update user") });
+  }
 });
 
 app.delete("/users/:id", requireAdmin, async (req, res) => {
