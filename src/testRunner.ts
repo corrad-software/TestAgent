@@ -52,6 +52,7 @@ export default defineConfig({
   ],
   use: {
     headless: ${headed ? "false" : "true"},
+    ${headed ? "slowMo: 1000," : ""}
     screenshot: "only-on-failure",
     trace: "on-first-retry",
     video: "on-first-retry",
