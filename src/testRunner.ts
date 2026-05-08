@@ -33,7 +33,10 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
   const modeLabel = headed ? "headed (visible browser)" : "headless";
   log(`🔧 Running: npx playwright test ${path.basename(specPath)} [${modeLabel}]`);
 
-  const args = ["playwright", "test", specPath];
+  // Pass only the filename — Playwright resolves it against testDir.
+  // Passing an absolute path causes "No tests found" when it doesn't
+  // match the configured testDir pattern.
+  const args = ["playwright", "test", path.basename(specPath)];
   if (headed) args.push("--headed");
 
   const exitCode = await new Promise<number>((resolve) => {
