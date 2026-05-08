@@ -123,6 +123,11 @@ app.post("/auth/login", async (req, res) => {
   res.json({ id: user.id, email: user.email, name: user.name, role: user.role, avatarUrl: user.avatarUrl });
 });
 
+// Expose the active DB backend so the UI can warn when on SQLite fallback
+app.get("/auth/db-status", (_req, res) => {
+  res.json({ backend: getActiveBackend() });
+});
+
 app.post("/auth/logout", (_req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.json({ ok: true });

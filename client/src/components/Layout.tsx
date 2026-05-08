@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users, BookOpen, Info } from "lucide-react";
+import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users, BookOpen, Info, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/AuthContext";
 import { getAppSettings } from "../lib/api";
@@ -32,6 +32,11 @@ export default function Layout() {
   const budget = settings?.aiBudget ?? 0;
   const remaining = budget > 0 ? Math.max(budget - spent, 0) : null;
   const spentPct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
+
+  const [dbBackend, setDbBackend] = useState<"mysql" | "sqlite" | null>(null);
+  useEffect(() => {
+    fetch("/auth/db-status").then(r => r.json()).then(d => setDbBackend(d.backend)).catch(() => {});
+  }, []);
 
   async function handleLogout() {
     await logout();
@@ -248,6 +253,12 @@ export default function Layout() {
         className="flex-1 flex flex-col transition-all duration-200"
         style={{ marginLeft: collapsed ? "4rem" : "16rem" }}
       >
+        {dbBackend === "sqlite" && (
+          <div className="flex items-center gap-2.5 bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-xs text-amber-300">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span><strong>SQLite fallback active</strong> — MySQL is unreachable. Only local data is shown. Go to <strong>App Settings → Database</strong> to reconnect.</span>
+          </div>
+        )}
         <Outlet />
       </main>
     </div>
