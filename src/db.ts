@@ -2,16 +2,12 @@ import "dotenv/config";
 import path from "path";
 import fs from "fs";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
-/**
- * `prisma` is a Proxy that forwards to whichever client `initDb()` selects.
- * Synchronous use before `initDb()` runs throws — but every caller is inside
- * a request handler that boots after `initDb()`, so this is fine.
- */
+const DEFAULT_MYSQL_URL = "mysql://kerisi:kerisi123@43.217.187.42:4151/testagent";
+
 let _client: any = null;
 export const prisma = new Proxy({} as PrismaClient, {
-  get(_t, prop, recv) {
+  get(_t, prop) {
     if (!_client) throw new Error("DB not initialized — call initDb() before using prisma");
     const v = (_client as any)[prop];
     return typeof v === "function" ? v.bind(_client) : v;
@@ -19,19 +15,20 @@ export const prisma = new Proxy({} as PrismaClient, {
 }) as PrismaClient;
 
 export type ActiveBackend = "mysql" | "sqlite";
-let _active: ActiveBackend = "sqlite";
+let _active: ActiveBackend = "mysql";
 export const getActiveBackend = (): ActiveBackend => _active;
 
-function makeSqliteClient(): PrismaClient {
-  const dbUrl = process.env.DATABASE_URL
-    ?? `file:${path.join(process.cwd(), "data/testAgent.db")}`;
-  const adapter = new PrismaBetterSqlite3({ url: dbUrl });
-  return new PrismaClient({ adapter } as any);
+function readDbUrlSync(): string {
+  const p = path.join(process.cwd(), "data", "app-settings.json");
+  try {
+    const j = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return j.dbUrl || DEFAULT_MYSQL_URL;
+  } catch {
+    return DEFAULT_MYSQL_URL;
+  }
 }
 
 async function makeMysqlClient(url: string): Promise<PrismaClient> {
-  // The MySQL client lives in a separate generated path because schema providers differ.
-  // It exposes the same model surface as the sqlite client, so casting is safe.
   const { PrismaClient: MysqlPrisma } = await import("../prisma/generated/mysql-client");
   const { PrismaMariaDb } = await import("@prisma/adapter-mariadb");
   const adapter = new PrismaMariaDb(url);
@@ -39,43 +36,28 @@ async function makeMysqlClient(url: string): Promise<PrismaClient> {
 }
 
 /**
- * Read the saved app-settings synchronously (avoids circular import with appSettings.ts,
- * which is async-fs-based). Returns the raw db config or null if the file doesn't exist.
- */
-function readDbSettingsSync(): { dbEnabled: boolean; dbUrl: string } | null {
-  const p = path.join(process.cwd(), "data", "app-settings.json");
-  try {
-    const raw = fs.readFileSync(p, "utf-8");
-    const j = JSON.parse(raw);
-    return { dbEnabled: !!j.dbEnabled, dbUrl: String(j.dbUrl ?? "") };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Pick the DB at boot. If MySQL is configured & enabled, try a connectivity probe;
- * on failure, fall back to SQLite so the app stays up.
+ * Always connects to MySQL. If the connection fails the server exits —
+ * there is no SQLite fallback. Configure the URL in App Settings → Database.
  */
 export async function initDb(): Promise<ActiveBackend> {
-  const cfg = readDbSettingsSync();
-  if (cfg?.dbEnabled && cfg.dbUrl) {
-    try {
-      // Probe with a lightweight mysql2 ping before instantiating Prisma.
-      const mysql = await import("mysql2/promise");
-      const conn = await mysql.createConnection({ uri: cfg.dbUrl, connectTimeout: 3000 });
-      await conn.query("SELECT 1");
-      await conn.end();
-      _client = await makeMysqlClient(cfg.dbUrl);
-      _active = "mysql";
-      console.log("[db] active backend: MySQL");
-      return _active;
-    } catch (e) {
-      console.warn(`[db] MySQL unreachable (${(e as Error).message}). Falling back to SQLite.`);
-    }
+  const url = process.env.MYSQL_DATABASE_URL || readDbUrlSync();
+
+  console.log(`[db] connecting to MySQL…`);
+  const mysql = await import("mysql2/promise");
+  let conn;
+  try {
+    conn = await mysql.createConnection({ uri: url, connectTimeout: 5000 });
+    await conn.query("SELECT 1");
+    await conn.end();
+  } catch (e) {
+    console.error(`[db] ❌ MySQL connection failed: ${(e as Error).message}`);
+    console.error(`[db] URL: ${url.replace(/:\/\/([^:]+):([^@]+)@/, "://$1:***@")}`);
+    console.error(`[db] Fix the MySQL connection in App Settings → Database, then restart.`);
+    process.exit(1);
   }
-  _client = makeSqliteClient();
-  _active = "sqlite";
-  console.log("[db] active backend: SQLite");
+
+  _client = await makeMysqlClient(url);
+  _active = "mysql";
+  console.log("[db] active backend: MySQL");
   return _active;
 }
