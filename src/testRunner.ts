@@ -104,6 +104,7 @@ export default defineConfig({
   });
 
   await fs.rm(tmpConfigPath, { force: true }).catch(() => {});
+  await fs.rm(specPath, { force: true }).catch(() => {});
 
   const passed = exitCode === 0;
   let summary = passed ? "All tests passed" : "One or more tests failed";

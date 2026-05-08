@@ -167,6 +167,31 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
     onSuccess: () => { setActiveModuleId(null); invalidate(); },
   });
 
+  const [renamingModuleId, setRenamingModuleId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const updateModuleMut = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => api.updateModule(id, { name }),
+    onSuccess: () => { setRenamingModuleId(null); invalidate(); },
+  });
+
+  function startRename(e: React.MouseEvent, m: api.Module) {
+    e.stopPropagation();
+    setRenamingModuleId(m.id);
+    setRenameValue(m.name);
+    setTimeout(() => renameInputRef.current?.select(), 0);
+  }
+
+  function commitRename(id: string) {
+    const name = renameValue.trim();
+    if (name && name !== modules.find((m: api.Module) => m.id === id)?.name) {
+      updateModuleMut.mutate({ id, name });
+    } else {
+      setRenamingModuleId(null);
+    }
+  }
+
   // ── Scenario management ─────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
   async function handleSaveScenario(data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">): Promise<boolean> {
@@ -314,19 +339,47 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
             ) : modules.map((m: api.Module) => (
               <div
                 key={m.id}
-                onClick={() => setActiveModuleId(m.id)}
+                onClick={() => { if (renamingModuleId !== m.id) setActiveModuleId(m.id); }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded mx-1 cursor-pointer group transition
                   ${m.id === activeModuleId ? "bg-emerald-500/15 text-emerald-300" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
               >
                 <Layers className={`w-3.5 h-3.5 flex-shrink-0 ${m.id === activeModuleId ? "text-emerald-400" : "text-gray-600"}`} />
-                <span className="text-xs flex-1 truncate font-medium">{m.name}</span>
-                <span className="text-xs text-gray-700 mr-1">{(m as any).scenarios?.length ?? 0}</span>
-                <button
-                  onClick={e => { e.stopPropagation(); if (confirm(`Delete module "${m.name}" and all its scenarios?`)) deleteModuleMut.mutate(m.id); }}
-                  className="w-4 h-4 flex items-center justify-center rounded hover:bg-gray-700 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition flex-shrink-0"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
+                {renamingModuleId === m.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onBlur={() => commitRename(m.id)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") { e.preventDefault(); commitRename(m.id); }
+                      if (e.key === "Escape") setRenamingModuleId(null);
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    className="text-xs flex-1 bg-gray-700 text-gray-100 rounded px-1 py-0.5 outline-none min-w-0"
+                    autoFocus
+                  />
+                ) : (
+                  <span className="text-xs flex-1 truncate font-medium">{m.name}</span>
+                )}
+                {renamingModuleId !== m.id && (
+                  <span className="text-xs text-gray-700 mr-1">{(m as any).scenarios?.length ?? 0}</span>
+                )}
+                {renamingModuleId !== m.id && (
+                  <button
+                    onClick={e => startRename(e, m)}
+                    className="w-4 h-4 flex items-center justify-center rounded hover:bg-gray-700 text-gray-600 hover:text-emerald-400 opacity-0 group-hover:opacity-100 transition flex-shrink-0"
+                  >
+                    <Pencil className="w-2.5 h-2.5" />
+                  </button>
+                )}
+                {renamingModuleId !== m.id && (
+                  <button
+                    onClick={e => { e.stopPropagation(); if (confirm(`Delete module "${m.name}" and all its scenarios?`)) deleteModuleMut.mutate(m.id); }}
+                    className="w-4 h-4 flex items-center justify-center rounded hover:bg-gray-700 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition flex-shrink-0"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -336,13 +389,13 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
         <div className="flex-1 flex flex-col min-w-0">
           {/* Module name + search/filter bar */}
           <div className="px-4 py-2.5 border-b border-gray-800 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm">
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <span className="text-sm min-w-0 truncate">
                 {activeModule
                   ? <span className="text-gray-200 font-medium">{activeModule.name}</span>
                   : <span className="text-gray-600 italic">Select a module to view scenarios</span>}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {activeModule && (
                   <button
                     onClick={() => {
@@ -395,26 +448,19 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
               <EmptyState icon={<FolderOpen className="w-12 h-12 text-gray-700" />} text="Create a project to get started" />
             ) : !activeModuleId ? (
               <EmptyState icon={<FolderOpen className="w-12 h-12 text-gray-700" />} text="Select a module from the list" sub="or create a module to get started" />
-            ) : !filteredScenarios.length && !scenarios.length ? (
-              <EmptyState
-                icon={<Inbox className="w-12 h-12 text-gray-700" />}
-                text="No scenarios in this module"
-                action={<button onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
-                  className="mt-3 text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg transition">
-                  + Add first scenario
-                </button>}
-              />
             ) : (
               <div className="flex flex-col">
-                {/* Table header */}
-                <div className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-widest border-b border-gray-800 sticky top-0 bg-gray-950 z-[1]">
-                  <span className="w-6 shrink-0" />
-                  <span className="w-16 shrink-0 hidden lg:block">ID</span>
-                  <span className="w-40 shrink-0 hidden xl:block">Scenario ID</span>
-                  <span className="flex-1 min-w-0">Scenario</span>
-                  <span className="w-14 shrink-0 text-center hidden md:block">Flow</span>
-                  <span className="w-16 shrink-0 text-center">Status</span>
-                </div>
+                {/* Table header — only when there are scenarios */}
+                {scenarios.length > 0 && (
+                  <div className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-widest border-b border-gray-800 sticky top-0 bg-gray-950 z-[1]">
+                    <span className="w-6 shrink-0" />
+                    <span className="w-16 shrink-0 hidden lg:block">ID</span>
+                    <span className="w-40 shrink-0 hidden xl:block">Scenario ID</span>
+                    <span className="flex-1 min-w-0">Scenario</span>
+                    <span className="w-14 shrink-0 text-center hidden md:block">Flow</span>
+                    <span className="w-16 shrink-0 text-center">Status</span>
+                  </div>
+                )}
                 {/* Root drop zone */}
                 <div
                   onDragOver={e => { e.preventDefault(); setDragOverGroupId("root"); }}
@@ -429,7 +475,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                   }}
                   className={`min-h-[4px] transition ${dragOverGroupId === "root" ? "bg-emerald-500/20 rounded" : ""}`}
                 />
-                {/* Group tree */}
+                {/* Group tree — always rendered so groups can be created even with no scenarios */}
                 <GroupTree
                   groups={groups}
                   scenarios={filteredScenarios}
@@ -462,6 +508,19 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                     onSelect={() => setSelectedScenario(s)}
                   />
                 ))}
+                {/* Empty state when no scenarios exist yet */}
+                {scenarios.length === 0 && (
+                  <div className="flex flex-col items-center py-12 text-center">
+                    <Inbox className="w-10 h-10 text-gray-700 mb-3" />
+                    <p className="text-sm text-gray-500">No scenarios in this module</p>
+                    <button
+                      onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
+                      className="mt-3 text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg transition"
+                    >
+                      + Add first scenario
+                    </button>
+                  </div>
+                )}
                 {filteredScenarios.length === 0 && scenarios.length > 0 && (
                   <div className="px-4 py-8 text-center text-xs text-gray-600">No scenarios match your filters</div>
                 )}

@@ -185,6 +185,9 @@ export async function updateScenario(id: string, data: Partial<Omit<Scenario, "i
 export async function deleteScenario(id: string): Promise<void> {
   await prisma.scenario.delete({ where: { id } });
 }
+export async function saveGeneratedSpec(id: string, specContent: string): Promise<void> {
+  await prisma.scenario.update({ where: { id }, data: { customSpec: specContent } });
+}
 export async function getScenario(id: string): Promise<Scenario | undefined> {
   const s = await prisma.scenario.findUnique({ where: { id } });
   return s ? mapScenario(s) : undefined;
