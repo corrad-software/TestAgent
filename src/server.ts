@@ -204,6 +204,13 @@ app.put("/users/:id", requireAdmin, async (req, res) => {
       data,
       select: { id: true, email: true, name: true, role: true, avatarUrl: true, createdAt: true, updatedAt: true },
     });
+    // Sync name/avatar changes to all Member rows for this user
+    const memberPatch: any = {};
+    if (data.name) memberPatch.name = data.name;
+    if (avatarUrl !== undefined) memberPatch.avatarUrl = avatarUrl || null;
+    if (Object.keys(memberPatch).length > 0) {
+      await prisma.member.updateMany({ where: { email: user.email }, data: memberPatch });
+    }
     res.json(user);
   } catch (err: any) {
     const notFound = err?.code === "P2025";
