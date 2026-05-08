@@ -30,21 +30,17 @@ export async function testMysqlConnection(url: string): Promise<TestResult> {
 }
 
 /**
- * Probe the configured DB on startup. App stays up either way: SQLite is the
- * fallback so the user can reconnect once their MySQL is reachable again.
+ * Probe the configured MySQL and update dbActive/dbLastError in settings.
+ * There is no SQLite fallback — MySQL is always the required backend.
  */
 export async function probeConfiguredDb(): Promise<TestResult> {
   const s = await getAppSettings();
-  if (!s.dbEnabled) {
-    await updateAppSettings({ dbActive: "sqlite", dbLastError: "" });
-    return { ok: true, active: "sqlite" };
-  }
   const r = await testMysqlConnection(s.dbUrl);
   await updateAppSettings({ dbActive: r.active, dbLastError: r.error ?? "" });
   if (!r.ok) {
-    console.warn(`[db] MySQL probe failed (${r.error}). Continuing on SQLite fallback.`);
+    console.warn(`[db] MySQL probe failed: ${r.error}`);
   } else {
-    console.log(`[db] MySQL reachable (${r.serverVersion}, ${r.pingMs}ms). Fallback active: SQLite.`);
+    console.log(`[db] MySQL reachable (${r.serverVersion}, ${r.pingMs}ms).`);
   }
   return r;
 }

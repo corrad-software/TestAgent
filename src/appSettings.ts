@@ -43,7 +43,7 @@ const DEFAULTS: AppSettings = {
   webhookUrl: "",
   webhookOnPass: false,
   webhookOnFail: true,
-  dbEnabled: false,
+  dbEnabled: true,
   dbUrl: "mysql://kerisi:kerisi123@43.217.187.42:4151/testagent",
   dbActive: "sqlite",
   dbLastError: "",

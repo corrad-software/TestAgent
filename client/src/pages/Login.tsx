@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Bot, Eye, EyeOff, Loader } from "lucide-react";
+import { useState, useEffect, type FormEvent } from "react";
+import { Bot, Eye, EyeOff, Loader, AlertTriangle } from "lucide-react";
 import { useAuth } from "../lib/AuthContext";
 
 export default function Login() {
@@ -9,6 +9,14 @@ export default function Login() {
   const [showPwd,  setShowPwd]  = useState(false);
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
+  const [dbBackend, setDbBackend] = useState<"mysql" | "sqlite" | null>(null);
+
+  useEffect(() => {
+    fetch("/auth/db-status")
+      .then(r => r.json())
+      .then(d => setDbBackend(d.backend))
+      .catch(() => {});
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -36,6 +44,17 @@ export default function Login() {
             <p className="text-xs text-gray-500 mt-0.5">Sign in to continue</p>
           </div>
         </div>
+
+        {/* SQLite fallback warning */}
+        {dbBackend === "sqlite" && (
+          <div className="mb-4 flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-xs text-amber-300">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Database not connected</p>
+              <p className="text-amber-400/80 mt-0.5">The app is running on local SQLite. Only locally-created accounts are available. Contact your admin to restore the MySQL connection.</p>
+            </div>
+          </div>
+        )}
 
         {/* Card */}
         <form onSubmit={handleSubmit} className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4 shadow-xl">
