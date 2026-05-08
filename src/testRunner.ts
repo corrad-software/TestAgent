@@ -21,32 +21,57 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
   const { specPath, runId, onLog, headed } = options;
   const cwd = process.cwd();
 
-  const reportDirRelative = `playwright-reports/${runId}`;
+  const reportDirAbs = path.join(cwd, "playwright-reports", runId).replace(/\\/g, "/");
   const jsonResultsPath = path.join(cwd, "test-results", "results.json");
 
-  // Remove stale JSON results
   try { await fs.rm(jsonResultsPath, { force: true }); } catch { /* ok */ }
 
   const steps: string[] = [];
   const log = (msg: string) => { steps.push(msg); onLog(msg); };
 
-  // Relative path from project root — unambiguous, works across Playwright versions.
-  const specRelative = path.relative(cwd, specPath);
+  const basename = path.basename(specPath);
   const modeLabel = headed ? "headed (visible browser)" : "headless";
-  log(`🔧 Running: npx playwright test ${specRelative} [${modeLabel}]`);
+  log(`🔧 Running: npx playwright test ${basename} [${modeLabel}]`);
 
-  const args = ["playwright", "test", specRelative];
+  // Write a per-run config so testDir is locked to generated-tests and
+  // the reporter output path is set correctly. This avoids all CLI
+  // pattern-matching issues across different Playwright versions.
+  const tmpConfigPath = path.join(cwd, `pw-run-${runId}.config.ts`);
+  const jsonOutputPath = path.join(cwd, "test-results", "results.json").replace(/\\/g, "/");
+
+  await fs.writeFile(tmpConfigPath, `import { defineConfig, devices } from "@playwright/test";
+export default defineConfig({
+  testDir: "./generated-tests",
+  retries: 0,
+  workers: 1,
+  timeout: 60_000,
+  reporter: [
+    ["line"],
+    ["html", { outputFolder: ${JSON.stringify(reportDirAbs)}, open: "never" }],
+    ["json", { outputFile: ${JSON.stringify(jsonOutputPath)} }],
+  ],
+  use: {
+    headless: ${headed ? "false" : "true"},
+    screenshot: "only-on-failure",
+    trace: "on-first-retry",
+    video: "on-first-retry",
+    navigationTimeout: 30_000,
+    actionTimeout: 15_000,
+  },
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+});
+`);
+
+  // Pass the basename — with testDir pointing at generated-tests, Playwright
+  // matches it correctly without any path ambiguity.
+  const args = ["playwright", "test", "--config", tmpConfigPath, basename];
   if (headed) args.push("--headed");
 
   const exitCode = await new Promise<number>((resolve) => {
     const proc = spawn("npx", args, {
       cwd,
       shell: true,
-      env: {
-        ...process.env,
-        PW_HTML_REPORT: reportDirRelative,
-        FORCE_COLOR: "0",
-      },
+      env: { ...process.env, FORCE_COLOR: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -55,9 +80,7 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
       stdoutBuf += chunk.toString();
       const lines = stdoutBuf.split("\n");
       stdoutBuf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.trim()) log(line);
-      }
+      for (const line of lines) { if (line.trim()) log(line); }
     });
 
     let stderrBuf = "";
@@ -65,9 +88,7 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
       stderrBuf += chunk.toString();
       const lines = stderrBuf.split("\n");
       stderrBuf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.trim()) log(`[stderr] ${line}`);
-      }
+      for (const line of lines) { if (line.trim()) log(`[stderr] ${line}`); }
     });
 
     proc.on("close", (code) => {
@@ -82,13 +103,14 @@ export async function runPlaywrightTest(options: TestRunnerOptions): Promise<Run
     });
   });
 
+  await fs.rm(tmpConfigPath, { force: true }).catch(() => {});
+
   const passed = exitCode === 0;
   let summary = passed ? "All tests passed" : "One or more tests failed";
 
   try {
     const jsonRaw = await fs.readFile(jsonResultsPath, "utf-8");
-    const jsonResults = JSON.parse(jsonRaw) as PlaywrightJsonResults;
-    summary = buildSummary(jsonResults);
+    summary = buildSummary(JSON.parse(jsonRaw) as PlaywrightJsonResults);
   } catch { /* use default summary */ }
 
   return {
