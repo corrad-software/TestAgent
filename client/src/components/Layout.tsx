@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Bot, Play, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users, BookOpen, Info, AlertTriangle } from "lucide-react";
+import { Bot, FolderOpen, BarChart2, Image, SlidersHorizontal, Layers, Route, PanelLeftClose, PanelLeftOpen, LogOut, Coins, Cpu, Users, BookOpen, Info, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../lib/AuthContext";
 import { getAppSettings } from "../lib/api";
@@ -77,7 +77,6 @@ export default function Layout() {
         <nav className="px-3 py-2.5 space-y-0.5 flex-1">
           {[
             { to: "/",             icon: FolderOpen,        label: "Projects",         adminOnly: false },
-            { to: "/run",          icon: Play,              label: "Quick Run Test",   adminOnly: false },
             { to: "/reports",      icon: BarChart2,         label: "Test Reports",     adminOnly: false },
             { to: "/screenshots", icon: Image,             label: "Screenshots",      adminOnly: false },
             { to: "/manual",       icon: BookOpen,           label: "User Manual",      adminOnly: false },

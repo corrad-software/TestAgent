@@ -128,15 +128,16 @@ model User {
 }
 
 model RunRecord {
-  id         String   @id @default(cuid())
-  scenarioId String
-  runAt      DateTime @default(now())
-  passed     Boolean
-  summary    String
-  reportId   String?
-  durationMs Int
-  logs       String?
-  runBy      String?
+  id            String   @id @default(cuid())
+  scenarioId    String
+  runAt         DateTime @default(now())
+  passed        Boolean
+  summary       String
+  reportId      String?
+  durationMs    Int
+  logs          String?
+  runBy         String?
+  screenshotUrl String?
 
   scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 }

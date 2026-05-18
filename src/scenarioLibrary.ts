@@ -46,6 +46,7 @@ export interface Scenario {
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
   summary: string; reportId?: string; durationMs: number; logs?: string; runBy?: string;
+  screenshotUrl?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
@@ -98,7 +99,8 @@ function mapRun(r: any): RunRecord {
            runAt: r.runAt instanceof Date ? r.runAt.toISOString() : r.runAt,
            passed: r.passed, summary: r.summary,
            reportId: r.reportId ?? undefined, durationMs: r.durationMs,
-           logs: r.logs ?? undefined, runBy: r.runBy ?? undefined };
+           logs: r.logs ?? undefined, runBy: r.runBy ?? undefined,
+           screenshotUrl: r.screenshotUrl ?? undefined };
 }
 function mapMember(m: any): Member {
   return { id: m.id, projectId: m.projectId, name: m.name, email: m.email,
@@ -256,19 +258,54 @@ export async function moveScenario(id: string, groupId: string | null): Promise<
   return mapScenario(s);
 }
 
+export async function getScenariosInGroup(groupId: string): Promise<Scenario[]> {
+  const allGroupIds: string[] = [];
+  const queue = [groupId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    allGroupIds.push(current);
+    const children = await prisma.scenarioGroup.findMany({
+      where: { parentId: current },
+      select: { id: true },
+    });
+    queue.push(...children.map(c => c.id));
+  }
+  const rows = await prisma.scenario.findMany({
+    where: { groupId: { in: allGroupIds } },
+    orderBy: [{ groupId: "asc" }, { caseNumber: "asc" }],
+  });
+  return rows.map(mapScenario);
+}
+
 // ─── Run History ──────────────────────────────────────────────────────────────
 
 const MAX_HISTORY_PER_SCENARIO = 100;
 
 export async function addRunRecord(record: Omit<RunRecord, "id">): Promise<RunRecord> {
-  const r = await prisma.runRecord.create({
-    data: {
-      scenarioId: record.scenarioId, passed: record.passed,
-      summary: record.summary, reportId: record.reportId,
-      durationMs: record.durationMs, runAt: new Date(record.runAt),
-      logs: record.logs ?? null, runBy: record.runBy ?? null,
-    },
-  });
+  let r: any;
+  try {
+    r = await prisma.runRecord.create({
+      data: {
+        scenarioId: record.scenarioId, passed: record.passed,
+        summary: record.summary, reportId: record.reportId,
+        durationMs: record.durationMs, runAt: new Date(record.runAt),
+        logs: record.logs ?? null, runBy: record.runBy ?? null,
+        screenshotUrl: record.screenshotUrl ?? null,
+      },
+    });
+  } catch (e: any) {
+    // screenshotUrl column may not exist yet — retry without it
+    if (e?.message?.includes("screenshotUrl") || e?.code === "P2009" || e?.code === "P2022") {
+      r = await (prisma.runRecord as any).create({
+        data: {
+          scenarioId: record.scenarioId, passed: record.passed,
+          summary: record.summary, reportId: record.reportId,
+          durationMs: record.durationMs, runAt: new Date(record.runAt),
+          logs: record.logs ?? null, runBy: record.runBy ?? null,
+        },
+      });
+    } else { throw e; }
+  }
   // Prune oldest beyond limit
   const all = await prisma.runRecord.findMany({
     where: { scenarioId: record.scenarioId },

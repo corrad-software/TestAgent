@@ -3,7 +3,6 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs/promises";
-import { spawn } from "child_process";
 import { chromium } from "playwright";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -13,7 +12,6 @@ import { testMysqlConnection, probeConfiguredDb } from "./dbConnection";
 import { requireAuth, requireAdmin, hashPassword, verifyPassword, signToken, seedAdminIfNeeded, COOKIE_NAME, COOKIE_OPTS } from "./auth";
 import { prisma, initDb, getActiveBackend } from "./db";
 import { generateSpec, injectAuthIntoSpec } from "./specGenerator";
-import { stepsToPlaywrightSpec } from "./stepsToSpec";
 import { runPlaywrightTest } from "./testRunner";
 import { TestType } from "./testSuites";
 import type { TestReport } from "./reporter";
@@ -53,6 +51,7 @@ import {
   moveGroup,
   deleteGroup,
   moveScenario,
+  getScenariosInGroup,
   saveGeneratedSpec,
 } from "./scenarioLibrary";
 
@@ -277,10 +276,9 @@ function makeRunId(testType: string): string {
 async function checkLogin(
   authConfig: { loginUrl: string; email: string; password: string },
   onLog: (msg: string) => void,
-  headed = false
 ): Promise<boolean> {
   onLog(`🔐 [AUTH] Checking login at ${authConfig.loginUrl}…`);
-  const browser = await chromium.launch({ headless: !headed });
+  const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
     await page.goto(authConfig.loginUrl, { timeout: 20000, waitUntil: 'networkidle' });
@@ -360,6 +358,73 @@ async function checkLogin(
   }
 }
 
+// ─── Inject TEST_USERNAME / TEST_PASSWORD constants into spec ────────────────
+function injectScriptVars(spec: string, username: string, password: string): string {
+  const vars = `const TEST_USERNAME = ${JSON.stringify(username)};\nconst TEST_PASSWORD = ${JSON.stringify(password)};\n`;
+  // Insert after the last import line
+  const lines = spec.split("\n");
+  let lastImport = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^import\s/.test(lines[i].trim())) lastImport = i;
+  }
+  if (lastImport >= 0) {
+    lines.splice(lastImport + 1, 0, "", vars.trimEnd());
+    return lines.join("\n");
+  }
+  return vars + "\n" + spec;
+}
+
+// ─── Normalize plain Playwright scripts into @playwright/test format ─────────
+function normalizeSpec(spec: string, testName: string): string {
+  // Already proper test format — leave it alone
+  if (/\btest\s*\(/.test(spec) || /\btest\.describe\s*\(/.test(spec)) {
+    return spec;
+  }
+
+  // Patterns whose lines (plus any multi-line brace block they open) are removed
+  const removePatterns = [
+    /require\s*\(\s*['"]playwright['"]\s*\)/,
+    /from\s+['"]playwright['"]/,
+    /^\s*\(async\s*\(\s*\)\s*=>/,
+    /(?:const|let|var)\s+browser\s*=/,
+    /(?:const|let|var)\s+context\s*=/,
+    /(?:const|let|var)\s+page\s*=.*newPage/,
+    /await\s+browser\.close\s*\(/,
+    /\/\/\s*await\s+browser\.close/,
+  ];
+
+  const lines = spec.split("\n");
+  const out: string[] = [];
+  let skipBraces = 0;
+
+  for (const line of lines) {
+    // Drain multi-line block opened by a removed line
+    if (skipBraces > 0) {
+      for (const ch of line) {
+        if (ch === "{") skipBraces++;
+        if (ch === "}") skipBraces--;
+      }
+      continue;
+    }
+    // IIFE closing: })(); or })()
+    if (/^\s*\}\s*\)\s*\(\s*\)\s*;?\s*$/.test(line)) continue;
+
+    if (removePatterns.some(p => p.test(line))) {
+      let depth = 0;
+      for (const ch of line) {
+        if (ch === "{") depth++;
+        if (ch === "}") depth--;
+      }
+      if (depth > 0) skipBraces = depth;
+      continue;
+    }
+    out.push(line);
+  }
+
+  const body = out.join("\n").trim();
+  return `import { test, expect } from '@playwright/test';\n\ntest(${JSON.stringify(testName)}, async ({ page }) => {\n${body}\n});\n`;
+}
+
 async function runOneType(
   testType: TestType,
   url: string,
@@ -367,12 +432,14 @@ async function runOneType(
   authConfig: { loginUrl: string; email: string; password: string } | undefined,
   send: (data: object) => void,
   onLog: (msg: string) => void,
-  headed = false,
   customSpec?: string,
 ): Promise<{ specContent?: string }> {
-  // Pre-flight login check
-  if (authConfig) {
-    const loginOk = await checkLogin(authConfig, onLog, headed);
+  // Credentials-only authConfig (loginUrl is empty) means inject vars into script, not pre-flight
+  const isCredentialsOnly = authConfig && !authConfig.loginUrl;
+
+  // Pre-flight login check (only when loginUrl is set)
+  if (authConfig && !isCredentialsOnly) {
+    const loginOk = await checkLogin(authConfig, onLog);
     if (!loginOk) {
       send({ type: "result", passed: false, summary: "Login failed — test skipped", steps: [], reportId: null, reportUrl: null, testType });
       return {};
@@ -380,7 +447,7 @@ async function runOneType(
   }
 
   if (testType === "quick") {
-    const browser = await chromium.launch({ headless: !headed });
+    const browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     try {
       const result = await runBasicTest(page, url, onLog);
@@ -394,9 +461,12 @@ async function runOneType(
     let specContent: string;
     const isAutoGenerated: boolean = !customSpec;
     if (customSpec) {
-      onLog(`📝 Using recorded spec (custom)`);
-      specContent = customSpec;
-      if (authConfig) {
+      onLog(`📝 Using custom spec`);
+      specContent = normalizeSpec(customSpec, description ?? "scenario test");
+      if (isCredentialsOnly && authConfig) {
+        specContent = injectScriptVars(specContent, authConfig.email, authConfig.password);
+        onLog(`🔑 Credentials injected as TEST_USERNAME / TEST_PASSWORD`);
+      } else if (authConfig) {
         specContent = injectAuthIntoSpec(specContent, authConfig);
       }
     } else {
@@ -407,18 +477,17 @@ async function runOneType(
     const specPath = path.join(specDir, `${runId}.spec.ts`);
     await fs.writeFile(specPath, specContent, "utf-8");
     onLog(`🔧 Launching Playwright test runner…`);
-    const result = await runPlaywrightTest({ specPath, runId, onLog, headed });
-    send({ type: "result", passed: result.passed, summary: result.summary, steps: result.steps, reportId: runId, reportUrl: result.reportUrl, testType });
+    const result = await runPlaywrightTest({ specPath, runId, onLog });
+    send({ type: "result", passed: result.passed, summary: result.summary, steps: result.steps, reportId: runId, reportUrl: result.reportUrl, screenshotUrl: result.screenshotUrl, testType });
     return isAutoGenerated ? { specContent } : {};
   }
 }
 
 // ─── POST /run-test ───────────────────────────────────────────────────────────
 app.post("/run-test", async (req, res) => {
-  const { url, description, testTypes: rawTestTypes, testType: rawTestType, demo, loginUrl, email, password, headed, record, enrich, customSpec } = req.body as {
+  const { url, description, testTypes: rawTestTypes, testType: rawTestType, demo, loginUrl, email, password, customSpec } = req.body as {
     url: string; description?: string; testTypes?: string[]; testType?: string;
-    demo?: boolean; loginUrl?: string; email?: string; password?: string; headed?: boolean;
-    record?: boolean; enrich?: boolean; customSpec?: string;
+    demo?: boolean; loginUrl?: string; email?: string; password?: string; customSpec?: string;
   };
 
   if (!url) { res.status(400).json({ error: "url is required" }); return; }
@@ -431,44 +500,6 @@ app.post("/run-test", async (req, res) => {
   const onLog = (msg: string) => send({ type: "log", message: msg });
 
   try {
-    // ── Record mode ──────────────────────────────────────────────────────
-    if (record) {
-      const { spawn } = await import("child_process");
-      const tmpDir = path.join(process.cwd(), "generated-tests");
-      await fs.mkdir(tmpDir, { recursive: true });
-      const specPath = path.join(tmpDir, `quick-record-${Date.now()}.spec.ts`);
-      const args = ["playwright", "codegen", url, "-o", specPath, "--target", "playwright-test"];
-      onLog(`🎬 Launching Playwright Codegen for ${url}`);
-      const proc = spawn("npx", args, { cwd: process.cwd(), env: { ...process.env, FORCE_COLOR: "0" }, stdio: ["ignore", "pipe", "pipe"], shell: true });
-      proc.stdout.on("data", d => onLog(d.toString().trim()));
-      proc.stderr.on("data", d => onLog(d.toString().trim()));
-
-      // Send heartbeat every 15s to keep SSE connection alive through proxies
-      const heartbeat = setInterval(() => res.write(":heartbeat\n\n"), 15_000);
-      req.on("close", () => { clearInterval(heartbeat); proc.kill(); });
-
-      await new Promise<void>(resolve => proc.on("close", () => { clearInterval(heartbeat); resolve(); }));
-      try {
-        const code = await fs.readFile(specPath, "utf-8");
-        send({ type: "recordEnd", code });
-        await fs.unlink(specPath).catch(() => {});
-      } catch {
-        send({ type: "error", message: "No code was recorded. Did you close the browser without performing actions?" });
-      }
-      res.end();
-      return;
-    }
-
-    // ── Enrich mode ──────────────────────────────────────────────────────
-    if (enrich && customSpec) {
-      const { enrichWithAssertions } = await import("./aiAssist");
-      const enriched = await enrichWithAssertions(customSpec, url, description, onLog);
-      send({ type: "enriched", code: enriched });
-      res.end();
-      return;
-    }
-
-    // ── Normal run ───────────────────────────────────────────────────────
     const testTypes: TestType[] = demo
       ? ["quick"]
       : rawTestTypes?.length ? rawTestTypes as TestType[]
@@ -478,7 +509,7 @@ app.post("/run-test", async (req, res) => {
 
     for (let i = 0; i < testTypes.length; i++) {
       if (i > 0) send({ type: "separator", testType: testTypes[i] });
-      await runOneType(testTypes[i], url, description, authConfig, send, onLog, headed, customSpec);
+      await runOneType(testTypes[i], url, description, authConfig, send, onLog, customSpec);
     }
   } catch (err) {
     send({ type: "error", message: (err as Error).message });
@@ -611,6 +642,121 @@ app.patch("/library/scenarios/:id/move", async (req, res) => {
   catch (err) { res.status(400).json({ error: (err as Error).message }); }
 });
 
+// ─── Library: Run all scenarios in a group (SSE) ─────────────────────────────
+app.post("/library/groups/:groupId/run", async (req, res) => {
+  const { groupId } = req.params;
+
+  const groupRow = await prisma.scenarioGroup.findUnique({ where: { id: groupId } });
+  if (!groupRow) { res.status(404).json({ error: "Group not found" }); return; }
+
+  const scenarios = await getScenariosInGroup(groupId);
+  if (!scenarios.length) { res.status(400).json({ error: "No scenarios in this group" }); return; }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  const envId: string | undefined = req.body?.environmentId;
+  const userName = (req as any).user?.email ?? (req as any).user?.name ?? "unknown";
+
+  let envRow: { id: string; name: string; baseUrl: string; authConfig: string | null } | null = null;
+  if (envId) {
+    envRow = await prisma.environment.findUnique({ where: { id: envId } }) ?? null;
+    if (envRow) send({ type: "log", message: `🌍 Environment: ${envRow.name} → ${envRow.baseUrl}` });
+  }
+
+  send({ type: "group-start", groupId, groupName: groupRow.name, total: scenarios.length });
+
+  const heartbeat = setInterval(() => res.write(":heartbeat\n\n"), 15_000);
+  req.on("close", () => clearInterval(heartbeat));
+
+  let passedCount = 0;
+  let failedCount = 0;
+
+  try {
+    for (const scenario of scenarios) {
+      send({ type: "scenario-start", scenarioId: scenario.id, name: scenario.name });
+
+      const runLogs: string[] = [];
+      const onLog = (msg: string) => {
+        runLogs.push(msg);
+        send({ type: "log", message: `[${scenario.name}] ${msg}` });
+      };
+
+      const startedAt = Date.now();
+      let passed = false;
+      let summary = "Skipped";
+      let reportId: string | undefined;
+      let screenshotUrl: string | undefined;
+
+      try {
+        let { url, authConfig } = scenario;
+
+        if (envRow) {
+          try {
+            const origHost = new URL(url).origin;
+            url = url.replace(origHost, envRow.baseUrl.replace(/\/$/, ""));
+          } catch { url = envRow.baseUrl; }
+          if (envRow.authConfig) authConfig = JSON.parse(envRow.authConfig);
+        }
+
+        const testTypes: TestType[] = scenario.testTypes?.length ? scenario.testTypes : ["smoke"];
+        const testType = testTypes[0];
+
+        const wrappedSend = (data: any) => {
+          if (data.type === "result") {
+            passed = data.passed;
+            summary = data.summary;
+            reportId = data.reportId;
+            screenshotUrl = data.screenshotUrl;
+          }
+          // suppress individual result events — aggregated into scenario-result below
+        };
+
+        const specOverride = scenario.customSpec ?? undefined;
+
+        await runOneType(testType, url, scenario.description, authConfig, wrappedSend, onLog, specOverride);
+
+        await addRunRecord({
+          scenarioId: scenario.id,
+          runAt: new Date().toISOString(),
+          passed,
+          summary,
+          reportId,
+          durationMs: Date.now() - startedAt,
+          logs: runLogs.join("\n"),
+          runBy: userName,
+          screenshotUrl,
+        });
+      } catch (err) {
+        summary = `Error: ${(err as Error).message}`;
+        passed = false;
+      }
+
+      if (passed) passedCount++; else failedCount++;
+
+      send({
+        type: "scenario-result",
+        scenarioId: scenario.id,
+        name: scenario.name,
+        passed,
+        summary,
+        reportId,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    send({ type: "group-complete", total: scenarios.length, passed: passedCount, failed: failedCount });
+  } catch (err) {
+    send({ type: "error", message: (err as Error).message });
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
+  }
+});
+
 // ─── Library: Scenarios ──────────────────────────────────────────────────────
 app.get("/library/scenarios", async (_req, res) => {
   try { res.json((await getLibrary()).scenarios); }
@@ -648,11 +794,7 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
   const startedAt = Date.now();
 
   try {
-    let { url, description, authConfig, customSpec, testSteps } = scenario;
-    const headed: boolean = req.body?.headed === true;
-    const useCustomSpec: boolean = req.body?.useCustomSpec === true && !!customSpec;
-    const useTestSteps: boolean = req.body?.useTestSteps === true && !!testSteps?.length;
-
+    let { url, description, authConfig, customSpec } = scenario;
     // Environment override
     const envId: string | undefined = req.body?.environmentId;
     if (envId) {
@@ -671,127 +813,30 @@ app.post("/library/scenarios/:id/run", async (req, res) => {
         }
       } catch { /* ignore env lookup errors */ }
     }
-    const testTypes: TestType[] = scenario.testTypes?.length ? scenario.testTypes : ["smoke"];
 
-    for (let i = 0; i < testTypes.length; i++) {
-      if (i > 0) send({ type: "separator", testType: testTypes[i] });
-      let lastPassed = true, lastSummary = "", lastReportId: string | undefined;
-      let bufferedResult: object | null = null;
-      const wrappedSend = (data: any) => {
-        if (data.type === "result") {
-          lastPassed = data.passed; lastSummary = data.summary; lastReportId = data.reportId;
-          runLogs.push(lastPassed ? "✅ Test Passed" : "❌ Test Failed");
-          bufferedResult = data;
-        } else { send(data); }
-      };
-      const specOverride = useTestSteps
-        ? stepsToPlaywrightSpec(testSteps!, scenario.name, url)
-        : useCustomSpec ? customSpec : undefined;
-      const { specContent: generatedSpec } = await runOneType(testTypes[i], url, description, authConfig, wrappedSend, onLog, headed, specOverride);
-      if (generatedSpec) {
-        await saveGeneratedSpec(scenario.id, generatedSpec).catch(() => {});
-        onLog(`💾 Spec saved to database`);
-      }
-      const userName = (req as any).user?.email ?? (req as any).user?.name ?? "unknown";
-      await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
-                           passed: lastPassed, summary: lastSummary,
-                           reportId: lastReportId, durationMs: Date.now() - startedAt,
-                           logs: runLogs.join("\n"), runBy: userName });
-      if (bufferedResult) send(bufferedResult);
-    }
+    let lastPassed = true, lastSummary = "", lastReportId: string | undefined, lastScreenshotUrl: string | undefined;
+    let bufferedResult: object | null = null;
+    const wrappedSend = (data: any) => {
+      if (data.type === "result") {
+        lastPassed = data.passed; lastSummary = data.summary; lastReportId = data.reportId;
+        lastScreenshotUrl = data.screenshotUrl;
+        runLogs.push(lastPassed ? "✅ Test Passed" : "❌ Test Failed");
+        bufferedResult = data;
+      } else { send(data); }
+    };
+
+    await runOneType("smoke", url, description, authConfig, wrappedSend, onLog, customSpec ?? undefined);
+
+    const userName = (req as any).user?.email ?? (req as any).user?.name ?? "unknown";
+    await addRunRecord({ scenarioId: scenario.id, runAt: new Date().toISOString(),
+                         passed: lastPassed, summary: lastSummary,
+                         reportId: lastReportId, durationMs: Date.now() - startedAt,
+                         logs: runLogs.join("\n"), runBy: userName,
+                         screenshotUrl: lastScreenshotUrl });
+    if (bufferedResult) send(bufferedResult);
   } catch (err) {
     send({ type: "error", message: (err as Error).message });
   } finally {
-    res.end();
-  }
-});
-
-// ─── Library: Record a scenario (Playwright Codegen via SSE) ────────────────
-app.post("/library/scenarios/:id/record", async (req, res) => {
-  const scenario = await getScenario(req.params.id);
-  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  try {
-    const specDir = path.join(process.cwd(), "generated-tests");
-    await fs.mkdir(specDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
-    const specPath = path.join(specDir, `record-${timestamp}.spec.ts`);
-
-    // If scenario has auth config, start recording at login URL so user can log in first
-    let startUrl = scenario.url;
-    if (scenario.authConfig?.loginUrl) {
-      startUrl = scenario.authConfig.loginUrl;
-    }
-
-    send({ type: "recordStart", message: "Opening browser with Playwright Recorder..." });
-    if (startUrl !== scenario.url) {
-      send({ type: "log", message: `🔐 Opening login page: ${startUrl}` });
-      send({ type: "log", message: `After logging in, navigate to: ${scenario.url}` });
-    } else {
-      send({ type: "log", message: `🎬 Recording for: ${scenario.url}` });
-    }
-    send({ type: "log", message: "Perform your actions in the browser. Close the browser when done." });
-
-    const args = ["playwright", "codegen", startUrl, "-o", specPath, "--target", "playwright-test"];
-    const proc = spawn("npx", args, {
-      cwd: process.cwd(),
-      env: { ...process.env, FORCE_COLOR: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
-    });
-
-    // Send heartbeat every 15s to keep SSE connection alive through proxies
-    const heartbeat = setInterval(() => res.write(":heartbeat\n\n"), 15_000);
-    req.on("close", () => { clearInterval(heartbeat); proc.kill(); });
-
-    proc.stdout.on("data", (chunk: Buffer) => {
-      const lines = chunk.toString().split("\n").filter(l => l.trim());
-      for (const line of lines) send({ type: "log", message: line });
-    });
-
-    proc.stderr.on("data", (chunk: Buffer) => {
-      const lines = chunk.toString().split("\n").filter(l => l.trim());
-      for (const line of lines) {
-        if (!line.includes("Browsing context") && !line.includes("bidi")) {
-          send({ type: "log", message: `[recorder] ${line}` });
-        }
-      }
-    });
-
-    proc.on("close", async (code) => {
-      clearInterval(heartbeat);
-      try {
-        const specContent = await fs.readFile(specPath, "utf-8");
-        if (specContent.trim().length > 0) {
-          send({ type: "log", message: `✅ Recording complete (${specContent.split("\n").length} lines)` });
-          send({ type: "codeGenerated", code: specContent });
-        } else {
-          send({ type: "log", message: "⚠️ No actions recorded — file is empty" });
-          send({ type: "codeGenerated", code: "" });
-        }
-      } catch {
-        send({ type: "log", message: code === 0
-          ? "⚠️ Browser closed but no code was generated"
-          : `❌ Recorder exited with code ${code}` });
-        send({ type: "codeGenerated", code: "" });
-      }
-      send({ type: "recordEnd" });
-      res.end();
-    });
-
-    proc.on("error", (err) => {
-      send({ type: "log", message: `❌ Recorder error: ${err.message}` });
-      send({ type: "recordEnd" });
-      res.end();
-    });
-  } catch (err) {
-    send({ type: "error", message: (err as Error).message });
     res.end();
   }
 });
@@ -802,32 +847,6 @@ app.get("/ai/usage", async (_req, res) => {
     const { getUsage } = await import("./aiAssist");
     res.json(getUsage());
   } catch { res.json({ totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, callCount: 0 }); }
-});
-
-// ─── Library: AI-assist endpoints ────────────────────────────────────────────
-app.post("/library/scenarios/:id/enrich", async (req, res) => {
-  const scenario = await getScenario(req.params.id);
-  if (!scenario) { res.status(404).json({ error: "Scenario not found" }); return; }
-  if (!scenario.customSpec) { res.status(400).json({ error: "No recorded spec to enrich" }); return; }
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  try {
-    const { enrichWithAssertions } = await import("./aiAssist");
-    const enriched = await enrichWithAssertions(
-      scenario.customSpec, scenario.url, scenario.description,
-      (msg) => send({ type: "log", message: msg }),
-    );
-    await updateScenario(scenario.id, { customSpec: enriched } as any);
-    send({ type: "enriched", code: enriched });
-  } catch (err) {
-    send({ type: "error", message: (err as Error).message });
-  } finally {
-    res.end();
-  }
 });
 
 app.post("/library/scenarios/:id/explain-failure", async (req, res) => {
@@ -841,45 +860,6 @@ app.post("/library/scenarios/:id/explain-failure", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
-
-// ─── Library: Save / Delete custom spec ─────────────────────────────────────
-app.put("/library/scenarios/:id/custom-spec", async (req, res) => {
-  try {
-    const s = await updateScenario(req.params.id, { customSpec: req.body.customSpec });
-    res.json(s);
-  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
-});
-app.delete("/library/scenarios/:id/custom-spec", async (req, res) => {
-  try {
-    await updateScenario(req.params.id, { customSpec: undefined } as any);
-    res.json({ ok: true });
-  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
-});
-
-// ─── Library: Save / Delete test steps ──────────────────────────────────────
-app.put("/library/scenarios/:id/test-steps", async (req, res) => {
-  try {
-    const s = await updateScenario(req.params.id, { testSteps: req.body.testSteps });
-    res.json(s);
-  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
-});
-app.delete("/library/scenarios/:id/test-steps", async (req, res) => {
-  try {
-    await updateScenario(req.params.id, { testSteps: undefined } as any);
-    res.json({ ok: true });
-  } catch (err) { res.status(400).json({ error: (err as Error).message }); }
-});
-
-// ─── Library: Preview steps as Playwright code ──────────────────────────────
-app.post("/library/scenarios/:id/steps-preview", async (req, res) => {
-  try {
-    const scenario = await getScenario(req.params.id);
-    if (!scenario) { res.status(404).json({ error: "Not found" }); return; }
-    const steps = req.body.testSteps ?? scenario.testSteps ?? [];
-    const code = stepsToPlaywrightSpec(steps, scenario.name, scenario.url);
-    res.json({ code });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
 // ─── Projects: Members ───────────────────────────────────────────────────────
