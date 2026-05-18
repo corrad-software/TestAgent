@@ -43,6 +43,7 @@ export interface Scenario {
 export interface RunRecord {
   id: string; scenarioId: string; runAt: string; passed: boolean;
   summary: string; reportId?: string; durationMs: number; logs?: string; runBy?: string;
+  screenshotUrl?: string;
 }
 export interface Member {
   id: string; projectId: string; name: string; email: string;
@@ -90,6 +91,15 @@ export const moveGroup = (id: string, parentId: string | null) =>
   fetch(`/library/groups/${id}/move`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parentId }) }).then(r => json<ScenarioGroup>(r));
 export const deleteGroup = (id: string) =>
   fetch(`/library/groups/${id}`, { method: "DELETE" }).then(r => json<{ ok: boolean }>(r));
+export const runGroup = (
+  groupId: string,
+  options: { environmentId?: string } = {}
+): Promise<Response> =>
+  fetch(`/library/groups/${groupId}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
 export const moveScenario = (id: string, groupId: string | null) =>
   fetch(`/library/scenarios/${id}/move`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId }) }).then(r => json<Scenario>(r));
 

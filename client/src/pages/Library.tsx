@@ -2,13 +2,13 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  Plus, Upload, Download, Play, Monitor, Pencil, Trash2,
-  Layers, Inbox, FolderOpen, BarChart2, X, Loader,
+  Plus, Upload, Download, Play, Pencil, Trash2,
+  Inbox, FolderOpen, BarChart2, X, Loader,
   CheckCircle2, ChevronLeft, ExternalLink, Tag, Clock, Search, Settings,
-  ArrowRight, ArrowLeft, Code, ListOrdered, Folder, FolderOpen as FolderOpenIcon, ChevronRight, ChevronDown, ChevronUp,
+  Folder, FolderOpen as FolderOpenIcon, ChevronRight, ChevronDown, ChevronUp, Image, BookOpen,
 } from "lucide-react";
 import * as api from "../lib/api";
-import { relativeTime, SUITE_LABELS, SUITE_COLORS } from "../lib/utils";
+import { relativeTime } from "../lib/utils";
 import { ProjectSettingsModal } from "./Settings";
 
 export default function Library() {
@@ -22,11 +22,16 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
   const [activeModuleId,  setActiveModuleId]  = useState<string | null>(null);
   const [showScenarioModal, setShowScenarioModal] = useState(false);
   const [editingScenario,   setEditingScenario]   = useState<api.Scenario | null>(null);
-  const [selectedScenario,  setSelectedScenario]  = useState<api.Scenario | null>(null);
+  const [initialTab,        setInitialTab]        = useState<"edit" | "run">("edit");
+  const [defaultGroupId,    setDefaultGroupId]    = useState<string | null>(null);
   const [importResult, setImportResult] = useState<{ created: number; createdNames: string[]; errors: { row: number; error: string }[] } | null>(null);
 
   // Project settings modal
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+
+  // Group run state
+  const [runningGroupId, setRunningGroupId] = useState<string | null>(null);
+  const [groupRunResults, setGroupRunResults] = useState<GroupRunState | null>(null);
 
   // Search & filter state
   const [searchQuery, setSearchQuery] = useState("");
@@ -194,15 +199,14 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
 
   // ── Scenario management ─────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
-  async function handleSaveScenario(data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">): Promise<boolean> {
+  async function handleSaveScenario(data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">): Promise<api.Scenario | false> {
     setSaving(true);
     try {
       const result = editingScenario
         ? await api.updateScenario(editingScenario.id, data)
         : await api.createScenario(data);
-      if (!editingScenario) setEditingScenario(result);
       invalidate();
-      return true;
+      return result;
     } catch {
       return false;
     } finally { setSaving(false); }
@@ -214,6 +218,52 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
   });
 
   // ── Import ──────────────────────────────────────────────────────────────────
+  async function handleRunGroup(groupId: string) {
+    setRunningGroupId(groupId);
+    setGroupRunResults(null);
+    try {
+      const res = await api.runGroup(groupId, {});
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+        for (const part of parts) {
+          if (!part.startsWith("data:")) continue;
+          try {
+            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
+            if (ev.type === "group-start") {
+              setGroupRunResults({ groupId: ev.groupId, groupName: ev.groupName, total: ev.total, completed: 0, results: [], running: true, logs: [] });
+            } else if (ev.type === "scenario-start") {
+              setGroupRunResults(prev => prev ? { ...prev, currentScenarioName: ev.name } : prev);
+            } else if (ev.type === "scenario-result") {
+              setGroupRunResults(prev => prev ? { ...prev, completed: prev.completed + 1, results: [...prev.results, ev], currentScenarioName: undefined } : prev);
+              qc.invalidateQueries({ queryKey: ["history", ev.scenarioId] });
+            } else if (ev.type === "group-complete") {
+              setGroupRunResults(prev => prev ? { ...prev, running: false } : prev);
+              setRunningGroupId(null);
+              invalidate();
+            } else if (ev.type === "log") {
+              setGroupRunResults(prev => {
+                if (!prev) return prev;
+                return { ...prev, logs: [...prev.logs, ev.message].slice(-50) };
+              });
+            } else if (ev.type === "error") {
+              setGroupRunResults(prev => prev ? { ...prev, running: false } : prev);
+              setRunningGroupId(null);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      setRunningGroupId(null);
+    }
+  }
+
   async function handleImport(files: FileList | File[]) {
     const arr = Array.from(files);
     const opts = effectiveProjectId
@@ -268,7 +318,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                 onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
             </label>
             <button
-              onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
+              onClick={() => { setEditingScenario(null); setInitialTab("edit"); setShowScenarioModal(true); }}
               className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
             >
               <Plus className="w-4 h-4" /> New Scenario
@@ -292,7 +342,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
               onChange={e => { if (e.target.files?.length) handleImport(e.target.files); e.target.value = ""; }} />
           </label>
           <button
-            onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
+            onClick={() => { setEditingScenario(null); setInitialTab("edit"); setShowScenarioModal(true); }}
             className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
           >
             <Plus className="w-4 h-4" /> New Scenario
@@ -303,9 +353,9 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
       {/* Two-panel body */}
       <div className="flex flex-1 min-h-0">
         {/* Left: Module list */}
-        <aside className="w-56 flex-shrink-0 border-r border-gray-800 bg-gray-900 flex flex-col">
+        <aside className="w-64 flex-shrink-0 border-r border-gray-800 bg-gray-900 flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Modules</span>
+            <span className="text-sm font-semibold text-gray-400 uppercase tracking-widest">Modules</span>
             {effectiveProjectId && (
               <button onClick={() => setShowModuleForm(f => !f)} title="New module"
                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700 text-gray-500 hover:text-gray-200 transition">
@@ -333,17 +383,16 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
 
           <div className="flex-1 overflow-y-auto py-2">
             {!effectiveProjectId ? (
-              <p className="px-4 py-2 text-xs text-gray-700 italic">Create a project first</p>
+              <p className="px-4 py-2 text-sm text-gray-600 italic">Create a project first</p>
             ) : !modules.length ? (
-              <p className="px-4 py-2 text-xs text-gray-700 italic">No modules yet</p>
+              <p className="px-4 py-2 text-sm text-gray-600 italic">No modules yet</p>
             ) : modules.map((m: api.Module) => (
               <div
                 key={m.id}
                 onClick={() => { if (renamingModuleId !== m.id) setActiveModuleId(m.id); }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded mx-1 cursor-pointer group transition
+                className={`flex items-center gap-2 px-3 py-2 rounded mx-1 cursor-pointer group transition
                   ${m.id === activeModuleId ? "bg-emerald-500/15 text-emerald-300" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
               >
-                <Layers className={`w-3.5 h-3.5 flex-shrink-0 ${m.id === activeModuleId ? "text-emerald-400" : "text-gray-600"}`} />
                 {renamingModuleId === m.id ? (
                   <input
                     ref={renameInputRef}
@@ -355,14 +404,14 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                       if (e.key === "Escape") setRenamingModuleId(null);
                     }}
                     onClick={e => e.stopPropagation()}
-                    className="text-xs flex-1 bg-gray-700 text-gray-100 rounded px-1 py-0.5 outline-none min-w-0"
+                    className="text-sm flex-1 bg-gray-700 text-gray-100 rounded px-1 py-0.5 outline-none min-w-0"
                     autoFocus
                   />
                 ) : (
-                  <span className="text-xs flex-1 truncate font-medium">{m.name}</span>
+                  <span className="text-sm flex-1 min-w-0 break-words font-medium leading-snug">{m.name}</span>
                 )}
                 {renamingModuleId !== m.id && (
-                  <span className="text-xs text-gray-700 mr-1">{(m as any).scenarios?.length ?? 0}</span>
+                  <span className="text-xs text-gray-600 mr-1">{(m as any).scenarios?.length ?? 0}</span>
                 )}
                 {renamingModuleId !== m.id && (
                   <button
@@ -485,7 +534,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                   setExpandedGroups={setExpandedGroups}
                   dragOverGroupId={dragOverGroupId}
                   setDragOverGroupId={setDragOverGroupId}
-                  onSelectScenario={s => setSelectedScenario(s)}
+                  onSelectScenario={s => { setEditingScenario(s); setInitialTab("run"); setShowScenarioModal(true); }}
                   onCreateGroup={(parentId) => {
                     const name = prompt("Group name:");
                     if (name?.trim()) createGroupMut.mutate({ name: name.trim(), parentId });
@@ -497,6 +546,9 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                   onMoveGroup={(gid, parentId) => moveGroupMut.mutate({ id: gid, parentId })}
                   onRenameGroupInline={(id, name) => updateGroupMut.mutate({ id, name })}
                   onReorderGroup={reorderGroup}
+                  onRunGroup={handleRunGroup}
+                  onAddScenarioToGroup={(groupId) => { setDefaultGroupId(groupId); setEditingScenario(null); setInitialTab("edit"); setShowScenarioModal(true); }}
+                  runningGroupId={runningGroupId}
                   moduleId={activeModuleId}
                 />
                 {/* Ungrouped scenarios */}
@@ -505,7 +557,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                     key={s.id}
                     scenario={s}
                     depth={0}
-                    onSelect={() => setSelectedScenario(s)}
+                    onSelect={() => { setEditingScenario(s); setInitialTab("run"); setShowScenarioModal(true); }}
                   />
                 ))}
                 {/* Empty state when no scenarios exist yet */}
@@ -514,7 +566,7 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
                     <Inbox className="w-10 h-10 text-gray-700 mb-3" />
                     <p className="text-sm text-gray-500">No scenarios in this module</p>
                     <button
-                      onClick={() => { setEditingScenario(null); setShowScenarioModal(true); }}
+                      onClick={() => { setEditingScenario(null); setInitialTab("edit"); setShowScenarioModal(true); }}
                       className="mt-3 text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg transition"
                     >
                       + Add first scenario
@@ -530,43 +582,26 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
         </div>
       </div>
 
-      {/* Scenario Modal */}
+      {/* Scenario Modal (Edit + Run) */}
       {showScenarioModal && activeProject && (
         <ScenarioModal
           scenario={editingScenario}
           project={activeProject}
-          members={members}
-          roles={roles}
           defaultModuleId={activeModuleId ?? ""}
+          defaultGroupId={editingScenario ? undefined : (defaultGroupId ?? undefined)}
           saving={saving}
           onSave={handleSaveScenario}
-          onBack={editingScenario ? () => {
-            setShowScenarioModal(false);
-            setSelectedScenario(editingScenario);
-            setEditingScenario(null);
-          } : undefined}
-          onClose={() => { setShowScenarioModal(false); setEditingScenario(null); }}
-        />
-      )}
-
-      {/* Scenario Detail / Run Modal */}
-      {selectedScenario && (
-        <ScenarioDetailModal
-          scenario={selectedScenario}
-          projectId={effectiveProjectId}
-          onEdit={() => {
-            setSelectedScenario(null);
-            setEditingScenario(selectedScenario);
-            setShowScenarioModal(true);
-          }}
           onDelete={() => {
-            if (confirm(`Delete "${selectedScenario.name}"?`)) {
-              deleteScenarioMut.mutate(selectedScenario.id);
-              setSelectedScenario(null);
+            if (editingScenario && confirm(`Delete "${editingScenario.name}"?`)) {
+              deleteScenarioMut.mutate(editingScenario.id);
+              setShowScenarioModal(false);
+              setEditingScenario(null);
             }
           }}
-          onClose={() => setSelectedScenario(null)}
+          onClose={() => { setShowScenarioModal(false); setEditingScenario(null); setDefaultGroupId(null); }}
+          projectId={effectiveProjectId}
           onRefresh={invalidate}
+          initialTab={initialTab}
         />
       )}
 
@@ -578,6 +613,14 @@ export function LibraryContent({ projectId, embedded = false }: { projectId: str
       {/* Project Settings Modal */}
       {showProjectSettings && effectiveProjectId && (
         <ProjectSettingsModal projectId={effectiveProjectId} onClose={() => setShowProjectSettings(false)} />
+      )}
+
+      {/* Group Run Modal */}
+      {groupRunResults && (
+        <GroupRunModal
+          state={groupRunResults}
+          onClose={() => { if (!groupRunResults.running) setGroupRunResults(null); }}
+        />
       )}
     </div>
   );
@@ -612,6 +655,9 @@ interface GroupTreeProps {
   onMoveGroup: (gid: string, parentId: string | null) => void;
   onRenameGroupInline: (id: string, name: string) => void;
   onReorderGroup: (id: string, direction: -1 | 1) => void;
+  onRunGroup: (groupId: string) => void;
+  onAddScenarioToGroup: (groupId: string) => void;
+  runningGroupId: string | null;
   moduleId: string;
 }
 
@@ -622,6 +668,7 @@ function GroupTree(props: GroupTreeProps) {
     dragOverGroupId, setDragOverGroupId,
     onSelectScenario, onCreateGroup, onDeleteGroup,
     onMoveScenario, onMoveGroup, onRenameGroupInline, onReorderGroup,
+    onRunGroup, onAddScenarioToGroup, runningGroupId,
   } = props;
 
   const siblings = groups
@@ -675,6 +722,15 @@ function GroupTree(props: GroupTreeProps) {
             onRename={name => onRenameGroupInline(group.id, name)}
             onMoveUp={() => onReorderGroup(group.id, -1)}
             onMoveDown={() => onReorderGroup(group.id, 1)}
+            onRunGroup={() => onRunGroup(group.id)}
+            onAddScenario={() => onAddScenarioToGroup(group.id)}
+            isRunning={group.id === runningGroupId}
+            hasScenarios={scenarios.some(s => {
+              const allGroupIds = (function collect(id: string): string[] {
+                return [id, ...groups.filter(g => g.parentId === id).flatMap(g => collect(g.id))];
+              })(group.id);
+              return allGroupIds.includes(s.groupId ?? "");
+            })}
           >
             {isOpen && (
               <>
@@ -695,7 +751,7 @@ function GroupRow({
   group, depth, isOpen, hasChildren, isDragOver,
   canMoveUp, canMoveDown, canAddSub,
   onToggle, onDragStartGroup, onDragOver, onDragLeave, onDrop,
-  onAddSub, onDelete, onRename, onMoveUp, onMoveDown, children,
+  onAddSub, onDelete, onRename, onMoveUp, onMoveDown, onRunGroup, onAddScenario, isRunning, hasScenarios, children,
 }: {
   group: api.ScenarioGroup; depth: number; isOpen: boolean;
   hasChildren: boolean; isDragOver: boolean;
@@ -710,6 +766,10 @@ function GroupRow({
   onRename: (name: string) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onRunGroup: () => void;
+  onAddScenario: () => void;
+  isRunning: boolean;
+  hasScenarios: boolean;
   children?: React.ReactNode;
 }) {
   const [editing, setEditing] = useState(false);
@@ -753,6 +813,23 @@ function GroupRow({
         )}
 
         <div className="flex items-center gap-0.5 opacity-0 group-hover/group:opacity-100 transition">
+          <button
+            onClick={e => { e.stopPropagation(); onAddScenario(); }}
+            title="Add test scenario to this group"
+            className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-emerald-400 text-xs"
+          >
+            <Plus className="w-3 h-3" />
+            <span>Add</span>
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); onRunGroup(); }}
+            disabled={isRunning || !hasScenarios}
+            title={!hasScenarios ? "No test items in this group" : "Run all scenarios in this group"}
+            className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-xs"
+          >
+            {isRunning ? <Loader className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            <span>Run</span>
+          </button>
           <button onClick={onMoveUp} disabled={!canMoveUp} title="Move up"
             className="flex items-center gap-0.5 px-1.5 h-5 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-600 text-xs">
             <ChevronUp className="w-3 h-3" /><span>Up</span>
@@ -774,6 +851,115 @@ function GroupRow({
         </div>
       </div>
       {children}
+    </div>
+  );
+}
+
+// ─── Group Run Types & Modal ──────────────────────────────────────────────────
+interface ScenarioRunResult {
+  scenarioId: string;
+  name: string;
+  passed: boolean;
+  summary: string;
+  reportId?: string;
+  durationMs: number;
+}
+
+interface GroupRunState {
+  groupId: string;
+  groupName: string;
+  total: number;
+  completed: number;
+  results: ScenarioRunResult[];
+  running: boolean;
+  currentScenarioName?: string;
+  logs: string[];
+}
+
+function GroupRunModal({ state, onClose }: { state: GroupRunState; onClose: () => void }) {
+  const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0;
+  const passed = state.results.filter(r => r.passed).length;
+  const failed = state.results.filter(r => !r.passed).length;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl flex flex-col max-h-[80vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-100">Running group: <span className="text-emerald-400">{state.groupName}</span></h2>
+            <p className="text-xs text-gray-500 mt-0.5">{state.completed} / {state.total} scenarios</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={state.running}
+            className="text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Progress bar */}
+        <div className="px-5 pt-3">
+          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Currently running */}
+        {state.running && state.currentScenarioName && (
+          <div className="px-5 pt-3 flex items-center gap-2 text-xs text-gray-400">
+            <Loader className="w-3 h-3 animate-spin text-emerald-400 shrink-0" />
+            <span className="truncate">Running: {state.currentScenarioName}</span>
+          </div>
+        )}
+
+        {/* Results list */}
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-1 min-h-0">
+          {state.results.map(r => (
+            <div key={r.scenarioId} className="flex items-center gap-2 text-xs py-1 border-b border-gray-800/40">
+              {r.passed
+                ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                : <X className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+              <span className={`flex-1 truncate ${r.passed ? "text-gray-300" : "text-gray-400"}`}>{r.name}</span>
+              <span className="text-gray-600 shrink-0">{(r.durationMs / 1000).toFixed(1)}s</span>
+              {r.reportId && (
+                <a
+                  href={`/playwright-report/${r.reportId}/index.html`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-gray-600 hover:text-emerald-400 shrink-0"
+                  title="View report"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          ))}
+          {state.running && state.results.length === 0 && (
+            <p className="text-xs text-gray-600 text-center py-4">Waiting for first result…</p>
+          )}
+        </div>
+
+        {/* Footer summary */}
+        {!state.running && (
+          <div className="px-5 py-3 border-t border-gray-800 flex items-center justify-between">
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-emerald-400 font-medium">{passed} passed</span>
+              {failed > 0 && <span className="text-red-400 font-medium">{failed} failed</span>}
+            </div>
+            <button
+              onClick={onClose}
+              className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg transition"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -847,68 +1033,114 @@ function ScenarioRow({ scenario: s, depth = 0, onSelect }: {
   );
 }
 
-// ─── Scenario Detail / Run Modal ─────────────────────────────────────────────
-function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose, onRefresh }: {
-  scenario: api.Scenario;
-  projectId: string;
-  onEdit: () => void;
+// ─── Scenario Modal (Edit + Run) ─────────────────────────────────────────────
+function ScenarioModal({ scenario, project, defaultModuleId, defaultGroupId, saving, onSave, onDelete, onClose, projectId, onRefresh, initialTab = "edit" }: {
+  scenario: api.Scenario | null;
+  project: api.Project;
+  defaultModuleId: string;
+  defaultGroupId?: string;
+  saving: boolean;
+  onSave: (data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">) => Promise<api.Scenario | false>;
   onDelete: () => void;
   onClose: () => void;
+  projectId: string;
   onRefresh: () => void;
+  initialTab?: "edit" | "run";
 }) {
-  const [running, setRunning]     = useState(false);
-  const [logs, setLogs]           = useState<string[]>([]);
-  const [result, setResult]       = useState<{ passed: boolean; text: string } | null>(null);
-  const [reportUrl, setReportUrl] = useState<string | null>(null);
-  const [recordedCode]            = useState<string | null>(s.customSpec ?? null);
-  const [runMode, setRunMode]     = useState<"ai" | "steps" | "recorded">(
-    s.testSteps?.length ? "steps" : s.customSpec ? "recorded" : "ai"
-  );
-  const [showSteps, setShowSteps]       = useState(false);
-  const [logTab, setLogTab]             = useState<"live" | "history">("live");
-  const [selectedEnvId, setSelectedEnvId] = useState<string>("");
+  const projectModules = project.modules ?? [];
+
+  // track the live scenario (updated after create/save so Run tab unlocks)
+  const [activeScenario, setActiveScenario] = useState<api.Scenario | null>(scenario);
+  const [tab, setTab] = useState<"edit" | "run">(activeScenario?.id ? initialTab : "edit");
+
+  // ── Edit state ─────────────────────────────────────────────────────────────
+  const [moduleId,      setModuleId]      = useState(activeScenario?.moduleId ?? defaultModuleId);
+  const [name,          setName]          = useState(activeScenario?.name ?? "");
+  const [url,           setUrl]           = useState(activeScenario?.url ?? "");
+  const [customSpec,    setCustomSpec]    = useState<string | null>(activeScenario?.customSpec ?? null);
+  const [testUsername,  setTestUsername]  = useState(activeScenario?.authConfig?.email ?? "");
+  const [testPassword,  setTestPassword]  = useState(activeScenario?.authConfig?.password ?? "");
+  const [showPassword,  setShowPassword]  = useState(false);
+  const [savedAt,         setSavedAt]         = useState<number | null>(null);
+  const [showInstruction, setShowInstruction] = useState(false);
+  const [snapshot,        setSnapshot]        = useState(() => JSON.stringify({ moduleId, name, url, customSpec, testUsername, testPassword }));
+  const isDirty = () => JSON.stringify({ moduleId, name, url, customSpec, testUsername, testPassword }) !== snapshot;
+
+  // ── Run state ──────────────────────────────────────────────────────────────
+  const [running,       setRunning]       = useState(false);
+  const [logs,          setLogs]          = useState<string[]>([]);
+  const [result,        setResult]        = useState<{ passed: boolean; text: string; screenshotUrl?: string } | null>(null);
+  const [reportUrl,     setReportUrl]     = useState<string | null>(null);
+  const [logTab,        setLogTab]        = useState<"live" | "history">("live");
+  const [selectedEnvId, setSelectedEnvId] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
 
   const { data: environments = [] } = useQuery({
     queryKey: ["environments", projectId],
     queryFn: () => api.getEnvironments(projectId),
-    enabled: !!projectId,
+    enabled: !!projectId && !!activeScenario?.id,
   });
-
-  const { data: history } = useQuery({
-    queryKey: ["history", s.id],
-    queryFn: () => api.getScenarioHistory(s.id),
+  const { data: history, refetch: refetchHistory } = useQuery({
+    queryKey: ["history", activeScenario?.id],
+    queryFn: () => api.getScenarioHistory(activeScenario!.id),
+    enabled: !!activeScenario?.id,
   });
   const lastRun = history?.[0];
-  const flowTag = s.tags.find(t => t === "positif" || t === "negatif");
+  const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
+  const effectiveReportUrl = reportUrl ?? lastReportUrl;
 
-  // Auto-scroll logs
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape" && !running) onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [running, onClose]);
 
-  async function run(headed = false) {
-    setRunning(true);
-    setResult(null);
-    setReportUrl(null);
-    setLogTab("live");
-    setLogs([headed ? "▶ Starting test (headed)…" : "▶ Starting test (headless)…"]);
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(null), 3000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
+
+  function confirmAndClose() {
+    if (isDirty()) {
+      if (confirm("You have unsaved changes. Discard them?")) onClose();
+    } else {
+      onClose();
+    }
+  }
+
+  async function submit() {
+    if (!moduleId || !name.trim()) { alert("Module and name are required."); return; }
+    const result = await onSave({
+      moduleId, name: name.trim(),
+      url: url.trim(),
+      testTypes: ["smoke"] as any,
+      tags: activeScenario?.tags ?? [],
+      groupId: activeScenario?.groupId ?? defaultGroupId ?? undefined,
+      customSpec: customSpec?.trim() || undefined,
+      authConfig: (testUsername.trim() || testPassword.trim())
+        ? { loginUrl: "", email: testUsername.trim(), password: testPassword.trim() }
+        : undefined,
+    });
+    if (result) {
+      setActiveScenario(result);
+      setSavedAt(Date.now());
+      setSnapshot(JSON.stringify({ moduleId, name, url, customSpec, testUsername, testPassword }));
+    }
+  }
+
+  async function run() {
+    if (!activeScenario?.id) return;
+    setRunning(true); setResult(null); setReportUrl(null); setLogTab("live");
+    setLogs(["▶ Starting test…"]);
     try {
-      const res = await fetch(`/library/scenarios/${s.id}/run`, {
+      const res = await fetch(`/library/scenarios/${activeScenario.id}/run`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          headed,
-          useCustomSpec: runMode === "recorded" && !!recordedCode,
-          useTestSteps: runMode === "steps" && !!(s.testSteps?.length),
-          environmentId: selectedEnvId || undefined,
-        }),
+        body: JSON.stringify({ useCustomSpec: !!activeScenario.customSpec, environmentId: selectedEnvId || undefined }),
       });
       const reader = res.body!.getReader();
       const dec = new TextDecoder();
@@ -922,1203 +1154,475 @@ function ScenarioDetailModal({ scenario: s, projectId, onEdit, onDelete, onClose
           if (!part.startsWith("data:")) continue;
           try {
             const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log") {
-              setLogs(prev => [...prev, ev.message]);
-            }
+            if (ev.type === "log") setLogs(p => [...p, ev.message]);
             if (ev.type === "result") {
               const text = ev.passed ? "✅ Test Passed" : "❌ Test Failed";
-              setResult({ passed: ev.passed, text });
-              setLogs(prev => [...prev, "", text]);
+              setResult({ passed: ev.passed, text, screenshotUrl: ev.screenshotUrl });
+              setLogs(p => [...p, "", text]);
               if (ev.reportId) setReportUrl(`/playwright-report/${ev.reportId}/index.html`);
-              onRefresh();
+              onRefresh(); refetchHistory();
             }
             if (ev.type === "error") {
               setResult({ passed: false, text: `Error: ${ev.message}` });
-              setLogs(prev => [...prev, `❌ Error: ${ev.message}`]);
+              setLogs(p => [...p, `❌ Error: ${ev.message}`]);
             }
-          } catch { /* skip */ }
+          } catch {}
         }
       }
     } catch (err) {
-      setLogs(prev => [...prev, `❌ ${(err as Error).message}`]);
+      setLogs(p => [...p, `❌ ${(err as Error).message}`]);
       setResult({ passed: false, text: (err as Error).message });
-    } finally {
-      setRunning(false);
-    }
+    } finally { setRunning(false); }
   }
 
-
-  const lastReportUrl = lastRun?.reportId ? `/playwright-report/${lastRun.reportId}/index.html` : null;
-  const effectiveReportUrl = reportUrl ?? lastReportUrl;
+  const inputCls = "w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition";
+  const labelCls = "block text-xs font-semibold text-gray-400 uppercase tracking-widest mb-1";
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
 
         {/* Header */}
-        <div className="flex items-start justify-between px-6 py-4 border-b border-gray-800 shrink-0">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-white leading-tight">{s.name}</h2>
-            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-              {s.caseNumber != null && (
-                <span className="text-xs bg-gray-800 text-gray-400 font-mono px-2 py-0.5 rounded">#{String(s.caseNumber).padStart(3, "0")}</span>
-              )}
-              {s.scenarioRefId && (
-                <span className="text-xs text-gray-500 font-mono">{s.scenarioRefId}</span>
-              )}
-              {flowTag && (
-                <span className={`text-xs px-1.5 py-0.5 rounded ${flowTag === "positif" ? "bg-blue-900/40 text-blue-300" : "bg-orange-900/40 text-orange-300"}`}>
-                  {flowTag === "positif" ? "Positif" : "Negatif"}
-                </span>
-              )}
+        <div className="shrink-0">
+          <div className="flex items-start justify-between px-6 pt-4 pb-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] text-gray-600 uppercase tracking-widest">{project.name}</p>
+              <h2 className="text-sm font-semibold text-white mt-0.5">
+                {activeScenario
+                  ? <span className="flex items-center gap-2">
+                      {activeScenario.caseNumber != null && <span className="text-xs bg-gray-800 text-gray-400 font-mono px-2 py-0.5 rounded">#{String(activeScenario.caseNumber).padStart(3, "0")}</span>}
+                      {activeScenario.name}
+                    </span>
+                  : "New Scenario"}
+              </h2>
               {lastRun && (
-                <span className="text-xs text-gray-600 flex items-center gap-1">
+                <p className="text-xs text-gray-600 mt-0.5 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   Last run {relativeTime(lastRun.runAt)} — <span className={lastRun.passed ? "text-green-500" : "text-red-400"}>{lastRun.passed ? "Passed" : "Failed"}</span>
-                </span>
+                </p>
               )}
             </div>
+            <button onClick={confirmAndClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none ml-4">&times;</button>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none ml-4">&times;</button>
+
+          {/* Tabs */}
+          <div className="flex border-b border-gray-800 px-2">
+            {(["edit", "run"] as const).map(t => (
+              <button key={t} onClick={() => { if (t === "run" && !activeScenario?.id) return; setTab(t); }}
+                disabled={t === "run" && !activeScenario?.id}
+                className={`relative px-4 py-2.5 text-xs font-semibold uppercase tracking-wider transition flex items-center gap-1.5
+                  ${tab === t ? "text-emerald-400" : activeScenario?.id || t === "edit" ? "text-gray-500 hover:text-gray-300" : "text-gray-700 cursor-not-allowed"}`}>
+                {t === "edit" ? <Pencil className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                {t === "edit" ? "Edit" : "Run"}
+                {t === "run" && !activeScenario?.id && <span className="text-[9px] text-gray-700 normal-case tracking-normal font-normal">— save first</span>}
+                {tab === t && <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-emerald-500 rounded-full" />}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Body — two columns */}
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-
-          {/* Left: Details + Actions */}
-          <div className="w-72 shrink-0 border-r border-gray-800 p-4 flex flex-col gap-3 overflow-y-auto min-h-0">
-            {/* URL */}
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">URL</p>
-              <a href={s.url} target="_blank" rel="noreferrer"
-                className="text-xs text-emerald-400 hover:underline flex items-center gap-1 truncate">
-                {s.url} <ExternalLink className="w-3 h-3 shrink-0" />
-              </a>
-            </div>
-
-            {/* Test Types */}
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Test Types</p>
-              <div className="flex flex-col gap-1">
-                {s.testTypes.map(t => {
-                  const liveResult = result;
-                  const hasRun = liveResult || lastRun;
-                  const isPassed = liveResult ? liveResult.passed : lastRun?.passed;
-                  const isRunningThis = running && !liveResult;
-                  return (
-                    <div key={t} className="flex items-center gap-2">
-                      {isRunningThis ? (
-                        <Loader className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />
-                      ) : hasRun ? (
-                        isPassed
-                          ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
-                          : <X className="w-3.5 h-3.5 text-red-500 shrink-0" />
-                      ) : (
-                        <span className="w-3.5 h-3.5 rounded-full border border-gray-700 shrink-0" />
-                      )}
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${SUITE_COLORS[t] ?? "bg-gray-800 text-gray-400"}`}>
-                        {SUITE_LABELS[t] ?? t}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Description */}
-            {s.description && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Description</p>
-                <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-28 overflow-y-auto leading-relaxed">{s.description}</p>
-              </div>
-            )}
-
-            {/* Tags */}
-            {s.tags.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Tags</p>
-                <div className="flex flex-wrap gap-1">
-                  {s.tags.map(t => (
-                    <span key={t} className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded flex items-center gap-1">
-                      <Tag className="w-2.5 h-2.5" />{t}
-                    </span>
-                  ))}
+        {/* ── Edit Tab ───────────────────────────────────────────────────── */}
+        {tab === "edit" && (
+          <>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Module</label>
+                  <select value={moduleId} onChange={e => setModuleId(e.target.value)} className={inputCls}>
+                    <option value="">— select module —</option>
+                    {projectModules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Scenario Name</label>
+                  <input value={name} onChange={e => setName(e.target.value)} autoFocus
+                    placeholder="e.g. Login page smoke test" className={inputCls} />
+                </div>
+                <div className="col-span-2">
+                  <label className={labelCls}>URL</label>
+                  <input value={url} onChange={e => setUrl(e.target.value)} type="url"
+                    placeholder="https://example.com" className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Username <span className="normal-case text-gray-600 font-normal tracking-normal">— available as <code className="text-emerald-500 bg-gray-800 px-1 rounded">TEST_USERNAME</code> in script</span></label>
+                  <input value={testUsername} onChange={e => setTestUsername(e.target.value)}
+                    placeholder="e.g. admin" autoComplete="off" className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Password <span className="normal-case text-gray-600 font-normal tracking-normal">— available as <code className="text-emerald-500 bg-gray-800 px-1 rounded">TEST_PASSWORD</code> in script</span></label>
+                  <div className="relative">
+                    <input value={testPassword} onChange={e => setTestPassword(e.target.value)}
+                      type={showPassword ? "text" : "password"}
+                      placeholder="••••••••" autoComplete="new-password" className={inputCls + " pr-10"} />
+                    <button type="button" onClick={() => setShowPassword(p => !p)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300 transition text-[10px]">
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
                 </div>
               </div>
-            )}
-
-            {/* Auth info */}
-            {s.authConfig && (
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1">Login</p>
-                <p className="text-xs text-gray-400 font-mono">{s.authConfig.email}</p>
-                <p className="text-xs text-gray-600 truncate">{s.authConfig.loginUrl}</p>
-              </div>
-            )}
-
-            {/* Spacer */}
-            <div className="flex-1" />
-
-            {/* Environment selector */}
-            {environments.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">Environment</p>
-                <select value={selectedEnvId} onChange={e => setSelectedEnvId(e.target.value)}
-                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
-                  <option value="">Default (scenario URL)</option>
-                  {environments.map(env => (
-                    <option key={env.id} value={env.id}>{env.name} — {env.baseUrl}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* ── Test source selector ─────────────────────────────────── */}
-            <div className="space-y-1.5">
-              <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest">Run using</p>
-              <div className="grid grid-cols-3 gap-1.5">
-                {/* Auto / template */}
-                <button
-                  onClick={() => setRunMode("ai")}
-                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
-                    ${runMode === "ai"
-                      ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-                      : "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"}`}
-                >
-                  <span className="text-base leading-none">⚡</span>
-                  <span className="text-[10px] font-semibold leading-tight">Auto</span>
-                  <span className="text-[9px] text-gray-600 leading-tight">generated spec</span>
-                </button>
-
-                {/* Test Steps */}
-                <button
-                  onClick={() => s.testSteps?.length && setRunMode("steps")}
-                  disabled={!s.testSteps?.length}
-                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
-                    ${runMode === "steps"
-                      ? "border-blue-500 bg-blue-500/10 text-blue-300"
-                      : s.testSteps?.length
-                        ? "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"
-                        : "border-gray-900 bg-gray-950/50 text-gray-700 cursor-not-allowed"}`}
-                >
-                  <span className="text-base leading-none">📋</span>
-                  <span className="text-[10px] font-semibold leading-tight">Steps</span>
-                  <span className="text-[9px] text-gray-600 leading-tight">
-                    {s.testSteps?.length ? `${s.testSteps.length} steps` : "none added"}
-                  </span>
-                </button>
-
-                {/* Recorded spec */}
-                <button
-                  onClick={() => recordedCode && setRunMode("recorded")}
-                  disabled={!recordedCode}
-                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-lg border text-center transition
-                    ${runMode === "recorded"
-                      ? "border-red-500 bg-red-500/10 text-red-300"
-                      : recordedCode
-                        ? "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-600 hover:text-gray-300"
-                        : "border-gray-900 bg-gray-950/50 text-gray-700 cursor-not-allowed"}`}
-                >
-                  <span className="text-base leading-none">🎬</span>
-                  <span className="text-[10px] font-semibold leading-tight">Recorded</span>
-                  <span className="text-[9px] text-gray-600 leading-tight">
-                    {recordedCode ? `${recordedCode.split("\n").length} lines` : "not recorded"}
-                  </span>
-                </button>
-              </div>
-
-              {/* Source hint */}
-              <p className="text-[10px] text-gray-600 leading-snug">
-                {runMode === "ai"    && "Runs a generated Playwright spec based on the selected test types. No setup required."}
-                {runMode === "steps" && "Runs the structured test steps you defined in this scenario."}
-                {runMode === "recorded" && "Replays your Playwright recording. Fastest and most deterministic."}
-              </p>
-            </div>
-
-            {/* ── Run buttons ──────────────────────────────────────────── */}
-            <div className="space-y-1.5">
-              <div className="flex gap-2">
-                <button onClick={() => run(false)} disabled={running}
-                  className="flex-1 flex flex-col items-center justify-center gap-0.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white py-2.5 rounded-lg transition">
-                  <span className="flex items-center gap-1.5">
-                    {running ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                    Run (Headless)
-                  </span>
-                  <span className="text-[9px] font-normal opacity-70">background, faster</span>
-                </button>
-                <button onClick={() => run(true)} disabled={running}
-                  className="flex-1 flex flex-col items-center justify-center gap-0.5 text-xs font-semibold bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white py-2.5 rounded-lg transition">
-                  <span className="flex items-center gap-1.5">
-                    <Monitor className="w-3.5 h-3.5" />
-                    Run (Visible)
-                  </span>
-                  <span className="text-[9px] font-normal opacity-70">opens browser window</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Hint to configure recording via Edit */}
-            {!recordedCode && (
-              <p className="text-[10px] text-gray-700 leading-snug text-center">
-                To record a Playwright spec, open <button onClick={onEdit} className="text-gray-500 hover:text-gray-300 underline underline-offset-2 transition">Edit Scenario</button> → Test Design.
-              </p>
-            )}
-
-            {/* Test steps viewer */}
-            {s.testSteps && s.testSteps.length > 0 && (
-              <div className="space-y-1.5">
-                <button onClick={() => setShowSteps(!showSteps)}
-                  className="text-xs text-gray-500 hover:text-gray-300 transition flex items-center gap-1">
-                  {showSteps ? "▾" : "▸"} Test Steps ({s.testSteps.length})
-                </button>
-                {showSteps && (
-                  <div className="space-y-1 bg-gray-950 border border-gray-800 rounded-lg p-2 max-h-40 overflow-y-auto">
-                    {s.testSteps.map((step, i) => (
-                      <div key={step.id} className="flex items-center gap-1.5 text-[11px]">
-                        <span className="text-gray-700 font-mono w-3 text-right shrink-0">{i + 1}</span>
-                        <span className="text-emerald-400 font-medium">{step.action}</span>
-                        {step.target && <span className="text-gray-500 font-mono truncate">{step.target}</span>}
-                        {step.input && <span className="text-gray-600 truncate">"{step.input}"</span>}
-                        {step.description && <span className="text-gray-700 italic truncate">— {step.description}</span>}
-                      </div>
-                    ))}
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <label className={labelCls + " mb-0"}>Playwright Script</label>
+                    <button onClick={() => setShowInstruction(true)}
+                      className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-emerald-400 transition font-medium">
+                      <BookOpen className="w-3 h-3" /> View Instruction
+                    </button>
                   </div>
-                )}
+                  {customSpec && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-emerald-500">{customSpec.split("\n").length} lines</span>
+                      <button onClick={() => setCustomSpec(null)}
+                        className="p-1 rounded text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition" title="Clear">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <textarea value={customSpec ?? ""} onChange={e => setCustomSpec(e.target.value || null)}
+                  spellCheck={false}
+                  placeholder={`import { test, expect } from '@playwright/test';\n\ntest('my scenario', async ({ page }) => {\n  await page.goto('https://example.com');\n  // paste your Playwright code here\n});`}
+                  className="w-full text-xs font-mono text-gray-300 bg-gray-950 border border-gray-800 rounded-lg p-3 h-72 resize-y outline-none focus:border-emerald-500 transition placeholder-gray-700"
+                />
               </div>
-            )}
-
-            {/* Report link */}
-            {effectiveReportUrl && (
-              <div className="flex gap-2">
-                <a href={effectiveReportUrl} target="_blank" rel="noreferrer"
-                  className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition">
-                  <BarChart2 className="w-3.5 h-3.5" /> View Report
-                </a>
-                {(reportUrl ?? lastReportUrl) && (() => {
-                  const rid = (reportUrl ?? lastReportUrl)!.split("/playwright-report/")[1]?.split("/")[0];
-                  return rid ? (
-                    <a href={`/playwright-report/${rid}/download`}
-                      className="flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 px-3 rounded-lg transition"
-                      title="Download report as ZIP">
-                      <Download className="w-3.5 h-3.5" /> ZIP
-                    </a>
-                  ) : null;
-                })()}
-              </div>
-            )}
-
-            {/* Edit / Delete */}
-            <div className="flex gap-2 pt-2 border-t border-gray-800">
-              <button onClick={onEdit}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 py-1.5 rounded-lg transition">
-                <Pencil className="w-3 h-3" /> Edit
+            </div>
+            <div className="px-6 py-3 border-t border-gray-800 flex items-center gap-2 shrink-0">
+              <button onClick={confirmAndClose}
+                className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">
+                Cancel
               </button>
-              <button onClick={onDelete}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-gray-800 hover:bg-red-900/50 text-gray-500 hover:text-red-400 py-1.5 rounded-lg transition">
-                <Trash2 className="w-3 h-3" /> Delete
+              {activeScenario?.id && (
+                <button onClick={onDelete}
+                  className="flex items-center gap-1 px-3 text-xs bg-gray-800 hover:bg-red-900/40 text-gray-500 hover:text-red-400 py-2 rounded-lg transition">
+                  <Trash2 className="w-3 h-3" /> Delete
+                </button>
+              )}
+              <div className="flex-1" />
+              {savedAt && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Saved</span>}
+              <button onClick={submit} disabled={saving || !moduleId || !name.trim()}
+                className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-6 py-2 rounded-lg transition">
+                {saving ? "Saving…" : activeScenario ? "Save Changes" : "Create Scenario"}
               </button>
             </div>
-          </div>
+          </>
+        )}
 
-          {/* Right: Live output + history */}
-          <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            {/* Tab header */}
-            <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-1">
-                <button onClick={() => setLogTab("live")}
-                  className={`text-xs font-semibold px-2.5 py-1 rounded transition ${logTab === "live" ? "bg-gray-800 text-gray-200" : "text-gray-500 hover:text-gray-300"}`}>
-                  Live Output
-                </button>
-                <button onClick={() => setLogTab("history")}
-                  className={`text-xs font-semibold px-2.5 py-1 rounded transition ${logTab === "history" ? "bg-gray-800 text-gray-200" : "text-gray-500 hover:text-gray-300"}`}>
-                  History {history?.length ? `(${history.length})` : ""}
-                </button>
-              </div>
-              {logTab === "live" && running && (
-                <span className="text-xs text-emerald-400 flex items-center gap-1.5">
-                  <Loader className="w-3 h-3 animate-spin" /> Running…
-                </span>
+        {/* ── Run Tab ────────────────────────────────────────────────────── */}
+        {tab === "run" && activeScenario?.id && (
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+
+            {/* Left: controls */}
+            <div className="w-60 shrink-0 border-r border-gray-800 p-4 flex flex-col gap-3 overflow-y-auto">
+
+              {environments.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-1">Environment</p>
+                  <select value={selectedEnvId} onChange={e => setSelectedEnvId(e.target.value)}
+                    className="w-full bg-gray-950 border border-gray-800 rounded-lg px-2 py-1.5 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
+                    <option value="">Default</option>
+                    {environments.map(env => <option key={env.id} value={env.id}>{env.name}</option>)}
+                  </select>
+                </div>
               )}
-              {logTab === "live" && result && !running && (
-                <span className={`text-xs font-semibold ${result.passed ? "text-green-400" : "text-red-400"}`}>
-                  {result.text}
-                </span>
+
+              <button onClick={() => run()} disabled={running}
+                className={`w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-white py-2.5 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed
+                  ${running
+                    ? "bg-emerald-700 ring-2 ring-emerald-400/40 ring-offset-1 ring-offset-gray-900"
+                    : "bg-emerald-500 hover:bg-emerald-600"}`}>
+                {running
+                  ? <><Loader className="w-3.5 h-3.5 animate-spin" /> Running…</>
+                  : <><Play className="w-3.5 h-3.5" /> Run Test</>}
+              </button>
+
+              <div className="flex-1" />
+
+              {effectiveReportUrl && (
+                <div className="flex gap-2">
+                  <a href={effectiveReportUrl} target="_blank" rel="noreferrer"
+                    className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 rounded-lg transition">
+                    <BarChart2 className="w-3.5 h-3.5" /> View Report
+                  </a>
+                  {(() => {
+                    const rid = effectiveReportUrl.split("/playwright-report/")[1]?.split("/")[0];
+                    return rid ? (
+                      <>
+                        <a href={`/playwright-report/${rid}/download`} title="Download ZIP"
+                          className="flex items-center justify-center text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 py-2 px-3 rounded-lg transition">
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                        {result?.screenshotUrl && (
+                          <a href={result.screenshotUrl} target="_blank" rel="noreferrer" title="View Screenshot"
+                            className="flex items-center justify-center text-xs bg-gray-800 hover:bg-gray-700 text-blue-400 py-2 px-3 rounded-lg transition">
+                            <Image className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                      </>
+                    ) : null;
+                  })()}
+                </div>
               )}
             </div>
 
-            {/* Live output tab */}
-            {logTab === "live" && (
-              <div ref={logRef}
-                className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed bg-gray-950">
-                {logs.length === 0 ? (
-                  <p className="text-gray-700 italic">Click "Run" to start a test…</p>
-                ) : (
-                  logs.map((line, i) => (
-                    <div key={i} className={`whitespace-pre-wrap ${
-                      line.startsWith("✅") ? "text-green-400 font-semibold" :
-                      line.startsWith("❌") ? "text-red-400 font-semibold" :
-                      line.startsWith("▶") ? "text-emerald-400" :
-                      line.startsWith("🎬") ? "text-red-300" :
-                      line.startsWith("[AUTH]") || line.startsWith("🔐") ? "text-amber-400" :
-                      line.startsWith("[stderr]") || line.startsWith("[recorder]") ? "text-orange-400" :
-                      "text-gray-400"
-                    }`}>{line}</div>
-                  ))
+            {/* Right: logs + history */}
+            <div className="flex-1 flex flex-col min-w-0 min-h-0">
+              <div className="px-4 py-2 border-b border-gray-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-1">
+                  {(["live", "history"] as const).map(t => (
+                    <button key={t} onClick={() => setLogTab(t)}
+                      className={`text-xs font-semibold px-2.5 py-1 rounded transition ${logTab === t ? "bg-gray-800 text-gray-200" : "text-gray-500 hover:text-gray-300"}`}>
+                      {t === "live" ? "Live Output" : `History${history?.length ? ` (${history.length})` : ""}`}
+                    </button>
+                  ))}
+                </div>
+                {logTab === "live" && running && (
+                  <span className="text-xs text-emerald-400 flex items-center gap-1.5"><Loader className="w-3 h-3 animate-spin" /> Running…</span>
+                )}
+                {logTab === "live" && result && !running && (
+                  <span className={`text-xs font-semibold ${result.passed ? "text-green-400" : "text-red-400"}`}>{result.text}</span>
                 )}
               </div>
-            )}
 
-            {/* History tab */}
-            {logTab === "history" && (
-              <div className="flex-1 overflow-y-auto bg-gray-950">
-                {!history?.length ? (
-                  <p className="text-gray-700 italic text-xs p-4">No run history yet</p>
-                ) : (
-                  history.map(run => (
-                    <details key={run.id} className="border-b border-gray-800/50 group">
-                      <summary className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-900/70 transition text-xs select-none">
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${run.passed ? "bg-green-500" : "bg-red-500"}`} />
-                        <span className={`font-semibold ${run.passed ? "text-green-400" : "text-red-400"}`}>
-                          {run.passed ? "Passed" : "Failed"}
-                        </span>
-                        <span className="text-gray-500">{relativeTime(run.runAt)}</span>
-                        <span className="text-gray-700 ml-auto">{(run.durationMs / 1000).toFixed(1)}s</span>
-                      </summary>
-                      <div className="px-4 pb-3 space-y-2">
-                        <p className="text-xs text-gray-500">{run.summary}</p>
-                        {run.reportId && (
-                          <div className="flex items-center gap-3">
-                            <a href={`/playwright-report/${run.reportId}/index.html`} target="_blank" rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
-                              <BarChart2 className="w-3 h-3" /> View Report
-                            </a>
-                            <a href={`/playwright-report/${run.reportId}/download`}
-                              className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 hover:underline">
-                              <Download className="w-3 h-3" /> Download ZIP
-                            </a>
+              {logTab === "live" && (
+                <div className="flex-1 flex flex-col min-h-0 bg-gray-950">
+                  <div ref={logRef} className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed">
+                    {logs.length === 0
+                      ? <p className="text-gray-700 italic">Click "Run" to start a test…</p>
+                      : logs.map((line, i) => (
+                          <div key={i} className={`whitespace-pre-wrap ${
+                            line.startsWith("✅") ? "text-green-400 font-semibold" :
+                            line.startsWith("❌") ? "text-red-400 font-semibold" :
+                            line.startsWith("▶") ? "text-emerald-400" :
+                            line.startsWith("[AUTH]") || line.startsWith("🔐") ? "text-amber-400" :
+                            line.startsWith("[stderr]") ? "text-orange-400" :
+                            "text-gray-400"
+                          }`}>{line}</div>
+                        ))
+                    }
+                  </div>
+                  {result?.screenshotUrl && (
+                    <div className="shrink-0 border-t border-gray-800 p-3">
+                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-2">Screenshot</p>
+                      <a href={result.screenshotUrl} target="_blank" rel="noreferrer">
+                        <img src={result.screenshotUrl} alt="Test screenshot"
+                          className="w-full max-h-48 object-cover object-top rounded border border-gray-800 hover:border-gray-600 transition cursor-zoom-in" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {logTab === "history" && (
+                <div className="flex-1 overflow-y-auto bg-gray-950">
+                  {!history?.length
+                    ? <p className="text-gray-700 italic text-xs p-4">No run history yet</p>
+                    : history.map(run => (
+                        <details key={run.id} className="border-b border-gray-800/50">
+                          <summary className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-900/70 transition text-xs select-none">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${run.passed ? "bg-green-500" : "bg-red-500"}`} />
+                            <span className={`font-semibold ${run.passed ? "text-green-400" : "text-red-400"}`}>{run.passed ? "Passed" : "Failed"}</span>
+                            <span className="text-gray-500">{relativeTime(run.runAt)}</span>
+                            {run.screenshotUrl && (
+                              <span className="text-[10px] text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded">📷</span>
+                            )}
+                            <span className="text-gray-700 ml-auto">{(run.durationMs / 1000).toFixed(1)}s</span>
+                          </summary>
+                          <div className="px-4 pb-3 space-y-2">
+                            <p className="text-xs text-gray-500">{run.summary}</p>
+                            {run.screenshotUrl && (
+                              <a href={run.screenshotUrl} target="_blank" rel="noreferrer">
+                                <img src={run.screenshotUrl} alt="Test screenshot"
+                                  className="w-full max-h-36 object-cover object-top rounded border border-gray-800 hover:border-gray-600 transition cursor-zoom-in" />
+                              </a>
+                            )}
+                            {run.reportId && (
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <a href={`/playwright-report/${run.reportId}/index.html`} target="_blank" rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:underline">
+                                  <BarChart2 className="w-3 h-3" /> View Report
+                                </a>
+                                <a href={`/playwright-report/${run.reportId}/download`}
+                                  className="inline-flex items-center gap-1 text-xs text-gray-400 hover:underline">
+                                  <Download className="w-3 h-3" /> Download ZIP
+                                </a>
+                                {run.screenshotUrl && (
+                                  <a href={run.screenshotUrl} target="_blank" rel="noreferrer"
+                                    className="inline-flex items-center gap-1 text-xs text-blue-400 hover:underline">
+                                    <Image className="w-3 h-3" /> View Photo
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                            {run.logs
+                              ? <pre className="text-xs font-mono text-gray-500 bg-gray-900 border border-gray-800 rounded-lg p-3 max-h-48 overflow-auto whitespace-pre-wrap">{run.logs}</pre>
+                              : <p className="text-xs text-gray-700 italic">No logs saved for this run</p>
+                            }
                           </div>
-                        )}
-                        {run.logs ? (
-                          <pre className="text-xs font-mono text-gray-500 bg-gray-900 border border-gray-800 rounded-lg p-3 max-h-48 overflow-auto whitespace-pre-wrap">
-                            {run.logs}
-                          </pre>
-                        ) : (
-                          <p className="text-xs text-gray-700 italic">No logs saved for this run</p>
-                        )}
-                      </div>
-                    </details>
-                  ))
-                )}
-              </div>
-            )}
+                        </details>
+                      ))
+                  }
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
       </div>
     </div>
+
+    {showInstruction && <PlaywrightInstructionModal onClose={() => setShowInstruction(false)} />}
+    </>
   );
 }
 
-// ─── Test Step Actions ────────────────────────────────────────────────────────
-const STEP_ACTIONS: { value: api.TestStep["action"]; label: string; icon: string }[] = [
-  { value: "navigate",       label: "Navigate",       icon: "🔗" },
-  { value: "click",          label: "Click",          icon: "👆" },
-  { value: "fill",           label: "Fill / Type",    icon: "✏️" },
-  { value: "select",         label: "Select Option",  icon: "📋" },
-  { value: "check",          label: "Check",          icon: "☑️" },
-  { value: "uncheck",        label: "Uncheck",        icon: "⬜" },
-  { value: "hover",          label: "Hover",          icon: "🖱️" },
-  { value: "wait",           label: "Wait",           icon: "⏳" },
-  { value: "screenshot",     label: "Screenshot",     icon: "📸" },
-  { value: "assert_visible", label: "Assert Visible", icon: "👁️" },
-  { value: "assert_text",    label: "Assert Text",    icon: "📝" },
-  { value: "assert_url",     label: "Assert URL",     icon: "🔍" },
-  { value: "custom",         label: "Custom Code",    icon: "💻" },
-];
-
-function makeStepId(): string {
-  return "s_" + Math.random().toString(36).slice(2, 9);
-}
-
-// ─── Test Steps Editor (dual-mode: table + code preview) ──────────────────────
-function TestStepsEditor({ steps, onChange, scenarioUrl }: {
-  steps: api.TestStep[];
-  onChange: (steps: api.TestStep[]) => void;
-  scenarioUrl: string;
-}) {
-  const [mode, setMode] = useState<"steps" | "code">("steps");
-  const [codePreview, setCodePreview] = useState("");
-
-  function addStep() {
-    onChange([...steps, { id: makeStepId(), action: "click", target: "", input: "", expected: "", description: "" }]);
-  }
-
-  function updateStep(id: string, patch: Partial<api.TestStep>) {
-    onChange(steps.map(s => s.id === id ? { ...s, ...patch } : s));
-  }
-
-  function removeStep(id: string) {
-    onChange(steps.filter(s => s.id !== id));
-  }
-
-  function moveStep(idx: number, dir: -1 | 1) {
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= steps.length) return;
-    const copy = [...steps];
-    [copy[idx], copy[newIdx]] = [copy[newIdx], copy[idx]];
-    onChange(copy);
-  }
-
-  function duplicateStep(idx: number) {
-    const copy = [...steps];
-    copy.splice(idx + 1, 0, { ...steps[idx], id: makeStepId() });
-    onChange(copy);
-  }
-
-  // Generate code preview
+// ─── Playwright Instruction Modal ─────────────────────────────────────────────
+function PlaywrightInstructionModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
-    if (mode !== "code" || !steps.length) return;
-    // Client-side preview generation (mirrors server stepsToSpec logic)
-    const lines: string[] = [];
-    lines.push(`import { test, expect } from '@playwright/test';`);
-    lines.push(``);
-    lines.push(`test.describe('Test Steps', () => {`);
-    lines.push(`  test('execute test steps', async ({ page }) => {`);
-    lines.push(`    await page.goto(${JSON.stringify(scenarioUrl)});`);
-    lines.push(``);
-    for (const step of steps) {
-      const t = step.target || "";
-      const v = step.input || "";
-      const desc = step.description ? `    // ${step.description}\n` : "";
-      let code = "";
-      switch (step.action) {
-        case "navigate":    code = `    await page.goto(${JSON.stringify(v || t)});`; break;
-        case "click":       code = `    await page.locator(${JSON.stringify(t)}).click();`; break;
-        case "fill":        code = `    await page.locator(${JSON.stringify(t)}).fill(${JSON.stringify(v)});`; break;
-        case "select":      code = `    await page.locator(${JSON.stringify(t)}).selectOption(${JSON.stringify(v)});`; break;
-        case "check":       code = `    await page.locator(${JSON.stringify(t)}).check();`; break;
-        case "uncheck":     code = `    await page.locator(${JSON.stringify(t)}).uncheck();`; break;
-        case "hover":       code = `    await page.locator(${JSON.stringify(t)}).hover();`; break;
-        case "wait":        code = `    await page.waitForTimeout(${parseInt(v) || 1000});`; break;
-        case "screenshot":  code = `    await page.screenshot({ path: ${JSON.stringify(v || "test-results/step-screenshot.png")} });`; break;
-        case "assert_visible": code = `    await expect(page.locator(${JSON.stringify(t)})).toBeVisible();`; break;
-        case "assert_text": code = `    await expect(page.locator(${JSON.stringify(t)})).toContainText(${JSON.stringify(v)});`; break;
-        case "assert_url":  code = `    await expect(page).toHaveURL(${JSON.stringify(v || t)});`; break;
-        case "custom":      code = `    ${v || `// Custom step: ${step.description ?? "TODO"}`}`; break;
-        default:            code = `    // Unknown action: ${step.action}`;
-      }
-      lines.push(desc + code);
-    }
-    lines.push(``);
-    lines.push(`    await page.screenshot({ path: 'test-results/steps-final.png' });`);
-    lines.push(`  });`);
-    lines.push(`});`);
-    setCodePreview(lines.join("\n"));
-  }, [steps, mode, scenarioUrl]);
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   return (
-    <div className="space-y-3">
-      {/* Mode toggle */}
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-0.5 bg-gray-950 rounded-lg p-0.5">
-          <button onClick={() => setMode("steps")}
-            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition font-medium ${mode === "steps" ? "bg-emerald-500/20 text-emerald-300" : "text-gray-500 hover:text-gray-300"}`}>
-            <ListOrdered className="w-3 h-3" /> Steps
-          </button>
-          <button onClick={() => setMode("code")}
-            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition font-medium ${mode === "code" ? "bg-blue-500/20 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
-            <Code className="w-3 h-3" /> Code Preview
-          </button>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[88vh]">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 shrink-0">
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-sm font-semibold text-white">How to Write a Playwright Script</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
         </div>
-        <span className="text-[10px] text-gray-600 ml-auto">{steps.length} step{steps.length !== 1 ? "s" : ""}</span>
-      </div>
 
-      {mode === "steps" ? (
-        <div className="space-y-2">
-          {/* Steps table */}
-          {steps.length === 0 ? (
-            <div className="text-center py-6 border border-dashed border-gray-800 rounded-lg">
-              <p className="text-xs text-gray-600 mb-2">No test steps yet</p>
-              <button onClick={addStep}
-                className="text-xs text-emerald-400 hover:text-emerald-300 transition font-medium">
-                + Add first step
-              </button>
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6 text-xs text-gray-300">
+
+          {/* Option A */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Option A</span>
+              <span className="font-semibold text-white">Long / complex flow — Record it</span>
             </div>
-          ) : (
-            <div className="space-y-1.5 max-h-[340px] overflow-y-auto pr-1">
-              {steps.map((step, idx) => (
-                <div key={step.id} className="group flex items-start gap-1.5 bg-gray-950 border border-gray-800 rounded-lg p-2 hover:border-gray-700 transition">
-                  {/* Step number + drag handle */}
-                  <div className="flex flex-col items-center gap-0.5 pt-1 shrink-0 w-6">
-                    <span className="text-[10px] text-gray-600 font-mono">{idx + 1}</span>
-                    <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition">
-                      <button onClick={() => moveStep(idx, -1)} disabled={idx === 0}
-                        className="text-gray-600 hover:text-gray-400 disabled:opacity-30 text-[10px]">▲</button>
-                      <button onClick={() => moveStep(idx, 1)} disabled={idx === steps.length - 1}
-                        className="text-gray-600 hover:text-gray-400 disabled:opacity-30 text-[10px]">▼</button>
-                    </div>
-                  </div>
-
-                  {/* Step content */}
-                  <div className="flex-1 grid grid-cols-12 gap-1.5 min-w-0">
-                    {/* Action dropdown */}
-                    <select value={step.action} onChange={e => updateStep(step.id, { action: e.target.value as api.TestStep["action"] })}
-                      className="col-span-3 bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-emerald-500 transition">
-                      {STEP_ACTIONS.map(a => <option key={a.value} value={a.value}>{a.icon} {a.label}</option>)}
-                    </select>
-
-                    {/* Target / Selector */}
-                    {!["navigate", "wait", "screenshot", "assert_url", "custom"].includes(step.action) && (
-                      <input value={step.target ?? ""} onChange={e => updateStep(step.id, { target: e.target.value })}
-                        placeholder="Selector (e.g. #email, button[type=submit])"
-                        className="col-span-4 bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 font-mono outline-none focus:border-emerald-500 transition" />
+            <p className="text-gray-500 mb-3">Best for flows with many steps. You click through the app and the script writes itself.</p>
+            <div className="mb-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2">
+              <p className="text-yellow-400 text-[11px] font-semibold mb-1">Prerequisites — do this once</p>
+              <p className="text-gray-400 text-[11px] mb-1">Install Node.js (if not already), then run:</p>
+              <pre className="bg-gray-950 border border-gray-800 rounded px-3 py-2 font-mono text-emerald-400 text-[11px]">npm install -g playwright{"\n"}npx playwright install chromium</pre>
+            </div>
+            <div className="space-y-2">
+              {[
+                { n: 1, text: "Open terminal on your laptop and run:", code: "npx playwright codegen https://yoursite.com" },
+                { n: 2, text: "A browser opens — click through your entire flow (login, navigate, fill forms, submit)." },
+                { n: 3, text: "Copy the generated script from the Inspector window on the right." },
+                { n: 4, text: "Paste it here → Save → go to Run tab → Run Test." },
+              ].map(s => (
+                <div key={s.n} className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-gray-800 text-gray-400 flex items-center justify-center font-bold text-[10px]">{s.n}</span>
+                  <div>
+                    <p className="text-gray-400">{s.text}</p>
+                    {s.code && (
+                      <pre className="mt-1 bg-gray-950 border border-gray-800 rounded px-3 py-2 font-mono text-emerald-400 text-[11px]">{s.code}</pre>
                     )}
-
-                    {/* Input / Value */}
-                    {["fill", "select", "navigate", "wait", "screenshot", "assert_text", "assert_url", "custom"].includes(step.action) && (
-                      <input value={step.input ?? ""} onChange={e => updateStep(step.id, { input: e.target.value })}
-                        placeholder={step.action === "wait" ? "ms (e.g. 1000)" : step.action === "custom" ? "Playwright code" : step.action === "navigate" ? "URL" : "Value"}
-                        className={`${!["navigate", "wait", "screenshot", "assert_url", "custom"].includes(step.action) ? "col-span-3" : "col-span-7"} bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 ${step.action === "custom" ? "font-mono" : ""} outline-none focus:border-emerald-500 transition`} />
-                    )}
-
-                    {/* Expected (for assertions) */}
-                    {["assert_visible", "assert_text", "assert_url"].includes(step.action) && (
-                      <input value={step.expected ?? ""} onChange={e => updateStep(step.id, { expected: e.target.value })}
-                        placeholder="Expected result"
-                        className={`${step.action === "assert_visible" ? "col-span-7" : "col-span-2"} bg-gray-900 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 outline-none focus:border-emerald-500 transition`} />
-                    )}
-
-                    {/* Spacer for actions without input/target */}
-                    {["click", "check", "uncheck", "hover"].includes(step.action) && (
-                      <div className="col-span-5" />
-                    )}
-
-                    {/* Description (inline, small) */}
-                    <input value={step.description ?? ""} onChange={e => updateStep(step.id, { description: e.target.value })}
-                      placeholder="Note..."
-                      className="col-span-12 bg-transparent border-none text-[11px] text-gray-600 placeholder-gray-800 outline-none px-2 py-0.5" />
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex flex-col gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
-                    <button onClick={() => duplicateStep(idx)} title="Duplicate"
-                      className="text-gray-600 hover:text-gray-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800 transition">⧉</button>
-                    <button onClick={() => removeStep(step.id)} title="Remove"
-                      className="text-gray-600 hover:text-red-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800 transition">✕</button>
                   </div>
                 </div>
               ))}
             </div>
-          )}
-
-          {/* Add step button */}
-          {steps.length > 0 && (
-            <button onClick={addStep}
-              className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-gray-500 hover:text-emerald-400 border border-dashed border-gray-800 hover:border-emerald-500/30 rounded-lg py-2 transition">
-              <Plus className="w-3 h-3" /> Add Step
-            </button>
-          )}
-        </div>
-      ) : (
-        /* Code preview mode */
-        <div className="relative">
-          <pre className="text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-3 max-h-[380px] overflow-auto whitespace-pre-wrap leading-relaxed">
-            {codePreview || "// Add test steps to see generated Playwright code"}
-          </pre>
-          <span className="absolute top-2 right-2 text-[10px] text-gray-700 bg-gray-900 px-1.5 py-0.5 rounded">Read-only preview</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Scenario Modal (Wizard) ──────────────────────────────────────────────────
-const WIZARD_STEPS = ["Basics", "Test Design", "Review"] as const;
-type WizardStep = (typeof WIZARD_STEPS)[number];
-
-const TEST_TYPES = [
-  { value: "smoke",         label: "🔍 Smoke" },
-  { value: "navigation",    label: "🔗 Navigation" },
-  { value: "forms",         label: "📝 Forms" },
-  { value: "responsive",    label: "📱 Responsive" },
-  { value: "accessibility", label: "♿ Accessibility" },
-  { value: "quick",         label: "⚡ Quick" },
-];
-
-function ScenarioModal({ scenario, project, members, roles, defaultModuleId, saving, onSave, onBack, onClose }: {
-  scenario: api.Scenario | null;
-  project: api.Project;
-  members: api.Member[];
-  roles: api.ProjectRole[];
-  defaultModuleId: string;
-  saving: boolean;
-  onSave: (data: Omit<api.Scenario, "id" | "createdAt" | "updatedAt">) => Promise<boolean>;
-  onBack?: () => void;
-  onClose: () => void;
-}) {
-  const projectModules = project.modules ?? [];
-
-  // Wizard state
-  const [wizardStep, setWizardStep] = useState<WizardStep>("Basics");
-  const wizardIdx = WIZARD_STEPS.indexOf(wizardStep);
-
-  // Form state
-  const [moduleId,      setModuleId]      = useState(scenario?.moduleId ?? defaultModuleId);
-  const [scenarioRefId, setScenarioRefId] = useState(scenario?.scenarioRefId ?? "");
-  const [name,        setName]        = useState(scenario?.name ?? "");
-  const [url,         setUrl]         = useState(scenario?.url ?? "");
-  const [testTypes, setTestTypes] = useState<string[]>(scenario?.testTypes ?? ["smoke"]);
-  const [description, setDescription] = useState(scenario?.description ?? "");
-  const [tags,        setTags]        = useState((scenario?.tags ?? []).join(", "));
-  const [assigneeId,  setAssigneeId]  = useState(scenario?.assigneeId ?? "");
-  const [roleId,      setRoleId]      = useState(scenario?.roleId ?? "");
-  const [loginUrl,    setLoginUrl]    = useState(scenario?.authConfig?.loginUrl ?? "");
-  const [loginEmail,  setLoginEmail]  = useState(scenario?.authConfig?.email ?? "");
-  const [loginPass,   setLoginPass]   = useState(scenario?.authConfig?.password ?? "");
-  const [savedAt,     setSavedAt]     = useState<number | null>(null);
-
-  // Test steps state
-  const [testSteps, setTestSteps] = useState<api.TestStep[]>(scenario?.testSteps ?? []);
-
-  // Recorded spec state (only meaningful for existing scenarios that have an id)
-  const [recordedCode, setRecordedCode]   = useState<string | null>(scenario?.customSpec ?? null);
-  const [recording,    setRecording]      = useState(false);
-  const [recordLogs,   setRecordLogs]     = useState<string[]>([]);
-  const [showSpecCode, setShowSpecCode]   = useState(false);
-  const [enriching,    setEnriching]      = useState(false);
-
-  async function recordSpec() {
-    if (!scenario?.id) return;
-    setRecording(true);
-    setRecordLogs(["🎬 Starting Playwright Recorder..."]);
-    try {
-      const res = await fetch(`/library/scenarios/${scenario.id}/record`, { method: "POST" });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
-        for (const part of parts) {
-          if (!part.startsWith("data:")) continue;
-          try {
-            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log") setRecordLogs(p => [...p, ev.message]);
-            if (ev.type === "codeGenerated" && ev.code) {
-              setRecordedCode(ev.code);
-              setShowSpecCode(true);
-              await fetch(`/library/scenarios/${scenario.id}/custom-spec`, {
-                method: "PUT", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ customSpec: ev.code }),
-              });
-            }
-            if (ev.type === "recordEnd") setRecordLogs(p => [...p, "🎬 Recording session ended"]);
-          } catch {}
-        }
-      }
-    } catch (err) {
-      setRecordLogs(p => [...p, `❌ ${(err as Error).message}`]);
-    } finally {
-      setRecording(false);
-    }
-  }
-
-  async function enrichSpec() {
-    if (!scenario?.id) return;
-    setEnriching(true);
-    setRecordLogs(["✨ Asking AI to add assertions..."]);
-    try {
-      const res = await fetch(`/library/scenarios/${scenario.id}/enrich`, { method: "POST" });
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
-        for (const part of parts) {
-          if (!part.startsWith("data:")) continue;
-          try {
-            const ev = JSON.parse(part.replace(/^data:\s*/, ""));
-            if (ev.type === "log") setRecordLogs(p => [...p, ev.message]);
-            if (ev.type === "enriched" && ev.code) {
-              setRecordedCode(ev.code);
-              setRecordLogs(p => [...p, "✅ Assertions added and saved"]);
-            }
-            if (ev.type === "error") setRecordLogs(p => [...p, `❌ ${ev.message}`]);
-          } catch {}
-        }
-      }
-    } catch (err) {
-      setRecordLogs(p => [...p, `❌ ${(err as Error).message}`]);
-    } finally {
-      setEnriching(false);
-    }
-  }
-
-  async function deleteSpec() {
-    if (!scenario?.id || !confirm("Delete the recorded spec? This cannot be undone.")) return;
-    await fetch(`/library/scenarios/${scenario.id}/custom-spec`, { method: "DELETE" });
-    setRecordedCode(null);
-    setShowSpecCode(false);
-    setRecordLogs([]);
-  }
-
-  // Snapshot of last saved values for dirty tracking
-  const [snapshot, setSnapshot] = useState(() => getFormValues());
-
-  function getFormValues() {
-    return JSON.stringify({ moduleId, scenarioRefId, name, url, testTypes, description, tags, assigneeId, roleId, loginUrl, loginEmail, loginPass, testSteps });
-  }
-
-  const isDirty = () => getFormValues() !== snapshot;
-
-  function confirmAndClose(action: () => void) {
-    if (isDirty()) {
-      if (confirm("You have unsaved changes. Discard them?")) action();
-    } else {
-      action();
-    }
-  }
-
-  // Auto-hide saved message after 3s
-  useEffect(() => {
-    if (!savedAt) return;
-    const t = setTimeout(() => setSavedAt(null), 3000);
-    return () => clearTimeout(t);
-  }, [savedAt]);
-
-  function canProceed(): boolean {
-    if (wizardStep === "Basics") return !!(moduleId && name.trim() && url.trim());
-    if (wizardStep === "Test Design") return testTypes.length > 0;
-    return true;
-  }
-
-  const toggleType = (t: string) =>
-    setTestTypes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
-
-  function nextStep() {
-    if (wizardIdx < WIZARD_STEPS.length - 1) setWizardStep(WIZARD_STEPS[wizardIdx + 1]);
-  }
-  function prevStep() {
-    if (wizardIdx > 0) setWizardStep(WIZARD_STEPS[wizardIdx - 1]);
-  }
-
-  async function submit() {
-    if (!moduleId || !name.trim() || !url.trim() || !testTypes.length) {
-      alert("Module, name, URL, and at least one test type are required."); return;
-    }
-    const authConfig = (loginUrl && loginEmail && loginPass)
-      ? { loginUrl, email: loginEmail, password: loginPass } : undefined;
-    const ok = await onSave({
-      moduleId, name: name.trim(), url: url.trim(), testTypes: testTypes as any,
-      scenarioRefId: scenarioRefId.trim() || undefined,
-      description: description.trim() || undefined,
-      tags: tags.split(",").map(t => t.trim()).filter(Boolean),
-      authConfig, assigneeId: assigneeId || undefined, roleId: roleId || undefined,
-      testSteps: testSteps.length > 0 ? testSteps : undefined,
-    });
-    if (ok) {
-      setSavedAt(Date.now());
-      setSnapshot(getFormValues());
-    }
-  }
-
-  const inputCls = "w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-emerald-500 transition";
-  const labelCls = "block text-xs font-semibold text-gray-400 uppercase tracking-widest";
-  const optSpan = <span className="text-gray-600 font-normal normal-case tracking-normal">— optional</span>;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="shrink-0">
-          <div className="flex items-center justify-between px-6 py-3">
-            <div className="flex items-center gap-3">
-              {onBack && (
-                <button onClick={() => confirmAndClose(onBack)}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-200 transition">
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-              )}
-              <div>
-                <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-0.5">
-                  <span>{project.name}</span>
-                  <span className="text-gray-700">/</span>
-                  <span>{projectModules.find(m => m.id === moduleId)?.name ?? "Select module"}</span>
-                </div>
-                <h2 className="text-sm font-semibold text-white">{scenario ? "Edit Scenario" : "New Scenario"}</h2>
-              </div>
-            </div>
-            <button onClick={() => confirmAndClose(onClose)} className="text-gray-500 hover:text-gray-200 transition text-xl leading-none">&times;</button>
           </div>
 
-          {/* Tab bar */}
-          <div className="flex border-b border-gray-800">
-            {WIZARD_STEPS.map((s, i) => {
-              const isActive = s === wizardStep;
-              const isCompleted = i < wizardIdx;
-              const isReachable = i <= wizardIdx || (i === wizardIdx + 1 && canProceed());
-              return (
-                <button key={s} onClick={() => { if (isReachable) setWizardStep(s); }}
-                  disabled={!isReachable}
-                  className={`relative flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider transition
-                    ${isActive
-                      ? "text-emerald-400"
-                      : isCompleted
-                        ? "text-gray-400 hover:text-gray-200 cursor-pointer"
-                        : isReachable
-                          ? "text-gray-500 hover:text-gray-300 cursor-pointer"
-                          : "text-gray-700 cursor-not-allowed"
-                    }`}>
-                  <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center font-bold border transition
-                    ${isActive
-                      ? "bg-emerald-500 text-white border-emerald-500"
-                      : isCompleted
-                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
-                        : "bg-gray-900 text-gray-600 border-gray-700"
-                    }`}>
-                    {isCompleted ? "✓" : i + 1}
-                  </span>
-                  {s}
-                  {/* Active indicator bar */}
-                  {isActive && (
-                    <span className="absolute bottom-0 left-4 right-4 h-0.5 bg-emerald-500 rounded-full" />
-                  )}
-                </button>
-              );
-            })}
+          <div className="border-t border-gray-800" />
+
+          {/* Option B */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="bg-blue-500/20 text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Option B</span>
+              <span className="font-semibold text-white">Short / simple flow — Generate with AI</span>
+            </div>
+            <p className="text-gray-500 mb-3">Best for simple flows under 10 steps. Use Claude.ai or ChatGPT — no API key needed.</p>
+            <div className="space-y-2">
+              {[
+                { n: 1, text: "Open Claude.ai or ChatGPT in your browser." },
+                { n: 2, text: "Upload your test script document (Word, PDF, Excel) as an attachment." },
+                { n: 3, text: "Send this prompt:" },
+                { n: 4, text: "Copy the generated script from the AI response." },
+                { n: 5, text: "Fill in Username and Password fields in this form (above the script box). The system will inject them automatically — no credentials in the script itself." },
+                { n: 6, text: "In the script, use TEST_USERNAME and TEST_PASSWORD wherever credentials are needed:" },
+                { n: 7, text: "Paste the script here → Save → go to Run tab → Run Test." },
+                { n: 8, text: "If it fails, check the screenshot in the History tab, then ask AI to fix it:" },
+              ].map(s => (
+                <div key={s.n} className="flex gap-3">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-gray-800 text-gray-400 flex items-center justify-center font-bold text-[10px]">{s.n}</span>
+                  <div className="flex-1">
+                    <p className="text-gray-400">{s.text}</p>
+                    {s.n === 3 && (
+                      <pre className="mt-1 bg-gray-950 border border-gray-800 rounded px-3 py-2 font-mono text-gray-300 text-[10px] whitespace-pre-wrap leading-relaxed">{`I have attached my test script document.
+Convert it to a Playwright test script using @playwright/test format.
+
+Rules:
+- Use: import { test, expect } from '@playwright/test'
+- Use async ({ page }) fixture
+- Do NOT use chromium.launch() or browser.newPage()
+- Use TEST_USERNAME and TEST_PASSWORD variables for any login credentials (do not hardcode values)
+- Add expect() assertions to verify each expected result
+- Use the URL from the test script document`}</pre>
+                    )}
+                    {s.n === 6 && (
+                      <pre className="mt-1 bg-gray-950 border border-gray-800 rounded px-3 py-2 font-mono text-emerald-400 text-[10px] whitespace-pre-wrap leading-relaxed">{`await page.fill('#username', TEST_USERNAME);
+await page.fill('#password', TEST_PASSWORD);`}</pre>
+                    )}
+                    {s.n === 8 && (
+                      <pre className="mt-1 bg-gray-950 border border-gray-800 rounded px-3 py-2 font-mono text-gray-300 text-[10px] whitespace-pre-wrap leading-relaxed">{`The test failed at this error: [paste error here]
+The screenshot shows: [describe what you see]
+Please fix the selector or add a wait before that step.`}</pre>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
+
+          <div className="border-t border-gray-800" />
+
+          {/* Quick reference */}
+          <div>
+            <p className="font-semibold text-white mb-2">Which option should I use?</p>
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="text-gray-600 border-b border-gray-800">
+                  <th className="text-left pb-1.5 font-medium">Situation</th>
+                  <th className="text-left pb-1.5 font-medium">Use</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-400">
+                {[
+                  ["Many steps / complex flow", "Option A (codegen)"],
+                  ["Simple flow (under 10 steps)", "Option B (AI)"],
+                  ["Have a test script document", "Option B (upload doc to AI)"],
+                  ["Script works but missing assertions", "Option B — ask AI to add assertions only"],
+                  ["Script fails with wrong selector", "Option A — re-record that section"],
+                ].map(([sit, use]) => (
+                  <tr key={sit} className="border-b border-gray-800/50">
+                    <td className="py-1.5 pr-4">{sit}</td>
+                    <td className="py-1.5 text-emerald-400 font-medium">{use}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
         </div>
 
-        {/* Body — changes based on wizard step */}
-        <div className="overflow-y-auto flex-1 px-6 py-4">
-
-          {/* ─── Step 1: Basics ─── */}
-          {wizardStep === "Basics" && (
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-              <div className="space-y-1">
-                <label className={labelCls}>Module</label>
-                <select value={moduleId} onChange={e => setModuleId(e.target.value)} className={inputCls}>
-                  <option value="">— select module —</option>
-                  {projectModules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className={labelCls}>URL</label>
-                <input value={url} onChange={e => setUrl(e.target.value)} type="url" placeholder="https://example.com" className={inputCls} />
-              </div>
-              <div className="space-y-1">
-                <label className={labelCls}>Scenario ID {optSpan}</label>
-                <input value={scenarioRefId} onChange={e => setScenarioRefId(e.target.value)} placeholder="e.g. SR-NAS-PRF-01" className={inputCls + " font-mono"} />
-              </div>
-              <div className="col-span-2 space-y-1">
-                <label className={labelCls}>Scenario Name</label>
-                <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Login page smoke test" className={inputCls} />
-              </div>
-              <div className="space-y-1">
-                <label className={labelCls}>Description {optSpan}</label>
-                <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
-                  placeholder="What should the test focus on?" className={inputCls + " resize-none"} />
-              </div>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <label className={labelCls}>Tags {optSpan}</label>
-                  <input value={tags} onChange={e => setTags(e.target.value)} placeholder="auth, critical, regression" className={inputCls} />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>User Role</label>
-                  <select value={roleId} onChange={e => setRoleId(e.target.value)} className={inputCls}>
-                    <option value="">— no role —</option>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
-                </div>
-                {members.length > 0 && (
-                  <div className="space-y-1">
-                    <label className={labelCls}>Assignee</label>
-                    <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className={inputCls}>
-                      <option value="">— unassigned —</option>
-                      {members.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
-                    </select>
-                  </div>
-                )}
-              </div>
-              <div className="col-span-2 border-t border-gray-800 pt-3 space-y-1.5">
-                <label className={labelCls}>Login Required {optSpan}</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <input value={loginUrl} onChange={e => setLoginUrl(e.target.value)} type="url" placeholder="Login URL" className={inputCls} />
-                  <input value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="Email / Username" className={inputCls} />
-                  <input value={loginPass} onChange={e => setLoginPass(e.target.value)} type="password" placeholder="Password" className={inputCls} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ─── Step 2: Test Design ─── */}
-          {wizardStep === "Test Design" && (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className={labelCls}>Test Types <span className="text-gray-600 font-normal normal-case tracking-normal">— select one or more</span></label>
-                <div className="flex flex-wrap gap-2">
-                  {TEST_TYPES.map(({ value, label }) => (
-                    <button key={value} type="button" onClick={() => toggleType(value)}
-                      className={`px-3 py-1 rounded-lg border text-xs font-medium transition select-none
-                        ${testTypes.includes(value)
-                          ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-                          : "border-gray-700 bg-gray-950 text-gray-400 hover:border-emerald-500/60"}`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="border-t border-gray-800 pt-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <ListOrdered className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-widest">Test Steps</h3>
-                  <span className="text-[10px] text-gray-600">— structured step-by-step actions (optional, Katalon-style)</span>
-                </div>
-                <TestStepsEditor steps={testSteps} onChange={setTestSteps} scenarioUrl={url || "https://example.com"} />
-              </div>
-
-              {/* ── Spec Recording ─────────────────────────────────────────── */}
-              <div className="border-t border-gray-800 pt-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-base leading-none">🎬</span>
-                  <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-widest">Playwright Recording</h3>
-                  <span className="text-[10px] text-gray-600">— optional; record once, replay on every run</span>
-                </div>
-
-                {!scenario?.id ? (
-                  <div className="bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 text-xs text-gray-600">
-                    Save this scenario first, then reopen it to record a Playwright spec.
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {/* Status + action row */}
-                    <div className="flex items-center gap-2">
-                      <div className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-lg border text-xs ${
-                        recordedCode
-                          ? "border-red-500/30 bg-red-500/5 text-red-300"
-                          : "border-gray-800 bg-gray-950 text-gray-600"
-                      }`}>
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${recordedCode ? "bg-red-500" : "bg-gray-700"}`} />
-                        {recordedCode
-                          ? `Spec recorded — ${recordedCode.split("\n").length} lines`
-                          : "No spec recorded yet"}
-                      </div>
-                      <button
-                        onClick={recordSpec}
-                        disabled={recording || enriching}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-400 text-xs font-semibold transition">
-                        {recording
-                          ? <><Loader className="w-3.5 h-3.5 animate-spin" /> Recording...</>
-                          : <><span className="w-2 h-2 rounded-full bg-red-500 shrink-0" /> {recordedCode ? "Re-record" : "Record"}</>}
-                      </button>
-                      {recordedCode && (
-                        <>
-                          <button
-                            onClick={enrichSpec}
-                            disabled={recording || enriching}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 disabled:opacity-50 text-violet-400 text-xs font-semibold transition">
-                            {enriching ? <><Loader className="w-3 h-3 animate-spin" /> Adding...</> : "✨ AI Assertions"}
-                          </button>
-                          <button
-                            onClick={deleteSpec}
-                            disabled={recording || enriching}
-                            className="p-2 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition" title="Delete spec">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Spec code viewer/editor */}
-                    {recordedCode && (
-                      <div className="space-y-1.5">
-                        <button onClick={() => setShowSpecCode(v => !v)}
-                          className="text-[10px] text-gray-600 hover:text-gray-400 transition flex items-center gap-1">
-                          {showSpecCode ? "▾" : "▸"} {showSpecCode ? "Hide" : "View"} spec code
-                        </button>
-                        {showSpecCode && (
-                          <div className="space-y-1.5">
-                            <textarea
-                              value={recordedCode}
-                              onChange={e => setRecordedCode(e.target.value)}
-                              spellCheck={false}
-                              className="w-full text-xs font-mono text-gray-400 bg-gray-950 border border-gray-800 rounded-lg p-2.5 h-40 resize-y outline-none focus:border-emerald-500 transition"
-                            />
-                            <button onClick={async () => {
-                              await fetch(`/library/scenarios/${scenario.id}/custom-spec`, {
-                                method: "PUT", headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ customSpec: recordedCode }),
-                              });
-                              setRecordLogs(["✅ Spec saved"]);
-                            }} className="flex items-center gap-1 text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-3 py-1.5 rounded-lg transition">
-                              Save Spec
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Live record log */}
-                    {recordLogs.length > 0 && (
-                      <div className="bg-gray-950 border border-gray-800 rounded-lg p-2.5 space-y-0.5 max-h-24 overflow-y-auto">
-                        {recordLogs.map((l, i) => (
-                          <p key={i} className="text-[10px] font-mono text-gray-500">{l}</p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ─── Step 3: Review ─── */}
-          {wizardStep === "Review" && (
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Review Before Saving</h3>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Left: Details */}
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Module</p>
-                    <p className="text-sm text-gray-200">{projectModules.find(m => m.id === moduleId)?.name ?? "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Scenario</p>
-                    <p className="text-sm text-gray-200 font-medium">{name || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">URL</p>
-                    <p className="text-xs text-emerald-400 font-mono break-all">{url || "—"}</p>
-                  </div>
-                  {scenarioRefId && (
-                    <div className="flex gap-4">
-                      {scenarioRefId && (
-                        <div>
-                          <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Scenario ID</p>
-                          <p className="text-xs text-gray-300 font-mono">{scenarioRefId}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {description && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Description</p>
-                      <p className="text-xs text-gray-400 whitespace-pre-wrap">{description}</p>
-                    </div>
-                  )}
-                  {tags && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Tags</p>
-                      <div className="flex flex-wrap gap-1">
-                        {tags.split(",").map(t => t.trim()).filter(Boolean).map(t => (
-                          <span key={t} className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(loginUrl && loginEmail) && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Auth</p>
-                      <p className="text-xs text-gray-400">{loginEmail} @ {loginUrl}</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Right: Test config summary */}
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">Test Types</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {testTypes.map(t => {
-                        const tt = TEST_TYPES.find(x => x.value === t);
-                        return (
-                          <span key={t} className="text-xs bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-lg">
-                            {tt?.label ?? t}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  {testSteps.length > 0 && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">Test Steps ({testSteps.length})</p>
-                      <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {testSteps.map((step, i) => {
-                          const act = STEP_ACTIONS.find(a => a.value === step.action);
-                          return (
-                            <div key={step.id} className="flex items-center gap-2 text-xs text-gray-400">
-                              <span className="text-gray-600 font-mono w-4 text-right shrink-0">{i + 1}</span>
-                              <span>{act?.icon}</span>
-                              <span className="font-medium text-gray-300">{act?.label ?? step.action}</span>
-                              {step.target && <span className="text-gray-600 font-mono truncate">{step.target}</span>}
-                              {step.input && <span className="text-gray-500 truncate">= {step.input}</span>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {roles.find(r => r.id === roleId) && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">User Role</p>
-                      <p className="text-xs text-gray-300">{roles.find(r => r.id === roleId)?.name}</p>
-                    </div>
-                  )}
-                  {members.find(m => m.id === assigneeId) && (
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-0.5">Assignee</p>
-                      <p className="text-xs text-gray-300">{members.find(m => m.id === assigneeId)?.name}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-gray-800 shrink-0">
+          <button onClick={onClose}
+            className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-semibold py-2 rounded-lg transition">
+            Got it
+          </button>
         </div>
 
-        {/* Footer with wizard navigation */}
-        <div className="px-6 py-3 border-t border-gray-800 flex items-center gap-3 shrink-0">
-          {/* Left: Back / Previous */}
-          {wizardIdx > 0 ? (
-            <button onClick={prevStep}
-              className="flex items-center gap-1.5 px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">
-              <ArrowLeft className="w-3.5 h-3.5" /> {WIZARD_STEPS[wizardIdx - 1]}
-            </button>
-          ) : (
-            <button onClick={() => confirmAndClose(onBack ?? onClose)}
-              className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition">
-              {onBack ? "Back" : "Cancel"}
-            </button>
-          )}
-
-          <div className="flex-1" />
-
-          {savedAt && (
-            <span className="text-xs text-green-400 flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Saved
-            </span>
-          )}
-
-          {/* Right: Next / Save */}
-          {wizardIdx < WIZARD_STEPS.length - 1 ? (
-            <button onClick={nextStep} disabled={!canProceed()}
-              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-5 py-2 rounded-lg transition">
-              {WIZARD_STEPS[wizardIdx + 1]} <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          ) : (
-            <button onClick={submit} disabled={saving}
-              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-semibold px-6 py-2 rounded-lg transition">
-              {saving ? "Saving…" : scenario ? "Save Changes" : "Create Scenario"}
-            </button>
-          )}
-        </div>
       </div>
     </div>
   );

@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
-import RunTest from "./pages/RunTest";
 import Projects from "./pages/Projects";
 import ProjectHub from "./pages/ProjectHub";
 import AppSettings from "./pages/AppSettings";
@@ -40,7 +39,6 @@ function ProtectedRoutes() {
         <Route path="project/:projectId" element={<ProjectHub />} />
         <Route path="library/:projectId" element={<LibraryRedirect />} />
         <Route path="dashboard" element={<Navigate to="/" replace />} />
-        <Route path="run" element={<RunTest />} />
         <Route path="reports" element={<Reports />} />
         <Route path="screenshots" element={<Screenshots />} />
         <Route path="manual" element={<UserManual />} />
